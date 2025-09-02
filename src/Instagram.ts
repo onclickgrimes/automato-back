@@ -1,0 +1,1571 @@
+import { Browser, Page, ElementHandle } from 'puppeteer';
+import type { Protocol } from 'puppeteer';
+import puppeteerExtra from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Adiciona o plugin stealth
+puppeteerExtra.use(StealthPlugin());
+
+export interface InstagramConfig {
+  username: string;
+  password: string;
+  headless?: boolean;
+  userDataDir?: string;
+  cookiesPath?: string;
+  viewport?: { width: number; height: number };
+  userAgent?: string;
+}
+
+export interface InstagramCredentials {
+  username: string;
+  password: string;
+}
+
+export interface PostData {
+  url: string;
+  timeAgo: string;
+  likes: number;
+  comments: number;
+  username: string;
+}
+
+export class Instagram {
+  private browser: Browser | null = null;
+  private page: Page | null = null;
+  private config: InstagramConfig;
+  private cookiesPath: string;
+  private isLoggedIn: boolean = false;
+  private userDataDir: string;
+  private isMonitoringNewMessages: boolean = false;
+  private isMonitoringNewPostsFromUsers: boolean = false;
+  
+  constructor(config: InstagramConfig) {
+    this.config = {
+      headless: config.headless ?? false, // Headful por padrão para desenvolvimento
+      viewport: config.viewport ?? { width: 1366, height: 768 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      ...config
+    };
+
+    this.userDataDir = this.config.userDataDir || path.join(process.cwd(), 'puppeteer-cache', this.config.username);
+    this.cookiesPath = this.config.cookiesPath || path.join(process.cwd(), 'puppeteer-cache', this.config.username, `cookies-${this.config.username}.json`);
+
+    // Cria diretórios se não existirem
+    this.ensureDirectoriesExist();
+  }
+
+  /**
+   * Garante que os diretórios necessários existam
+   */
+  private ensureDirectoriesExist(): void {
+    const dirs = [
+      path.dirname(this.cookiesPath),
+      this.userDataDir
+    ];
+
+    dirs.forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    });
+  }
+
+  /**
+   * Inicializa o navegador e a página
+   */
+  async init(): Promise<void> {
+    try {
+      console.log('🚀 Inicializando Instagram Automator...');
+
+      this.browser = await puppeteerExtra.launch({
+        headless: this.config.headless ?? false,
+        userDataDir: this.userDataDir,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-ipc-flooding-protection',
+          '--window-size=1366,768',
+          // Configurações para Brasil/Português
+          '--lang=pt-BR',
+          '--accept-lang=pt-BR,pt;q=0.9,en;q=0.8'
+        ],
+        defaultViewport: this.config.viewport ?? { width: 1366, height: 768 }
+      });
+
+      this.page = await this.browser.newPage();
+
+      // Configura user agent
+      await this.page.setUserAgent(this.config.userAgent!);
+
+      // Configura viewport
+      await this.page.setViewport(this.config.viewport!);
+
+      // Configurações de localização para Brasil
+      await this.page.setExtraHTTPHeaders({
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8'
+      });
+
+      // Define geolocalização para Brasil
+      await this.page.setGeolocation({ latitude: -23.5505, longitude: -46.6333 }); // São Paulo
+
+      // Define timezone para Brasil
+      await this.page.emulateTimezone('America/Sao_Paulo');
+
+      // // Intercepta requests para otimização
+      // await this.page.setRequestInterception(true);
+      // this.page.on('request', (req) => {
+      //   const resourceType = req.resourceType();
+      //   if (resourceType === 'image' || resourceType === 'stylesheet' || resourceType === 'font') {
+      //     req.abort();
+      //   } else {
+      //     req.continue();
+      //   }
+      // });
+
+      console.log('✅ Navegador inicializado com sucesso');
+
+      // Tenta fazer login
+      await this.login();
+
+    } catch (error) {
+      console.error('❌ Erro ao inicializar:', error);
+      await this.takeScreenshot('init-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Realiza login no Instagram
+   */
+  async login(): Promise<void> {
+    if (!this.page) throw new Error('Página não inicializada');
+
+    try {
+      console.log('🔐 Iniciando processo de login...');
+
+      // Tenta carregar cookies salvos primeiro
+      if (await this.loadCookies()) {
+        console.log('🍪 Cookies carregados, verificando sessão...');
+
+        await this.page.goto('https://www.instagram.com/', { waitUntil: 'networkidle2' });
+        await this.randomDelay(2000, 4000);
+
+        // Verifica se está logado
+        if (await this.isUserLoggedIn()) {
+          console.log('✅ Login realizado com sucesso via cookies');
+          this.isLoggedIn = true;
+          return;
+        }
+      }
+
+      console.log('🔑 Realizando login via formulário...');
+      await this.loginWithCredentials();
+
+    } catch (error) {
+      console.error('❌ Erro no login:', error);
+      await this.takeScreenshot('login-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Realiza login usando credenciais
+   */
+  private async loginWithCredentials(): Promise<void> {
+    if (!this.page) throw new Error('Página não inicializada');
+
+    await this.page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'networkidle2' });
+    await this.randomDelay(2000, 4000);
+
+    // Aguarda os campos de login aparecerem
+    await this.page.waitForSelector('input[name="username"]', { timeout: 10000 });
+    await this.page.waitForSelector('input[name="password"]', { timeout: 10000 });
+
+    // Preenche username com digitação humana
+    await this.humanType('input[name="username"]', this.config.username);
+    await this.randomDelay(1000, 2000);
+
+    // Preenche password com digitação humana
+    await this.humanType('input[name="password"]', this.config.password);
+    await this.randomDelay(1000, 2000);
+
+    // Clica no botão de login
+    await this.page.click('button[type="submit"]');
+
+    // Aguarda navegação ou erro
+    try {
+      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 });
+    } catch (error) {
+      // Pode não haver navegação se houver erro
+    }
+
+    await this.randomDelay(3000, 5000);
+
+    // Verifica se o login foi bem-sucedido
+    if (await this.isUserLoggedIn()) {
+      console.log('✅ Login realizado com sucesso via credenciais With Credentials');
+      this.isLoggedIn = true;
+
+      // Verifica se há página de desafio/captcha
+      if (await this.isChallengePageDetected()) {
+        await this.handleChallengePage();
+      }
+
+      // Salva cookies para próximas sessões
+      await this.saveCookies();
+
+      // Lida com popups pós-login
+      await this.handlePostLoginPopups();
+    } else {
+      throw new Error('Falha no login - verifique suas credenciais');
+    }
+  }
+
+  /**
+   * Verifica se o usuário está logado
+   */
+  private async isUserLoggedIn(): Promise<boolean> {
+    if (!this.page) return false;
+
+    try {
+      // Verifica se existe o elemento de perfil ou feed
+      const profileSelector = 'a[href*="/" + this.config.username + "/"]';
+      const feedSelector = 'article';
+      const loginSelector = 'input[name="username"]';
+
+      await this.page.waitForTimeout(2000);
+
+      // Se encontrar campo de login, não está logado
+      const loginField = await this.page.$(loginSelector);
+      if (loginField) return false;
+
+      // Se encontrar feed ou perfil, está logado
+      const feed = await this.page.$(feedSelector);
+      if (feed) return true;
+
+      // Verifica URL atual
+      const currentUrl = this.page.url();
+      return !currentUrl.includes('/accounts/login/');
+
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Lida com popups que aparecem após o login
+   */
+  private async handlePostLoginPopups(): Promise<void> {
+    if (!this.page) return;
+
+    try {
+      // "Salvar informações de login"
+      const saveInfoButton = await this.page.$('button:contains("Agora não")');
+      if (saveInfoButton) {
+        await saveInfoButton.click();
+        await this.randomDelay(1000, 2000);
+      }
+
+      // "Ativar notificações"
+      const notificationButton = await this.page.$('button:contains("Agora não")');
+      if (notificationButton) {
+        await notificationButton.click();
+        await this.randomDelay(1000, 2000);
+      }
+
+    } catch (error) {
+      // Ignora erros de popups
+    }
+  }
+
+  /**
+   * Verifica se estamos na página de desafio/captcha do Instagram
+   */
+  private async isChallengePageDetected(): Promise<boolean> {
+    if (!this.page) return false;
+
+    try {
+      const currentUrl = this.page.url();
+
+      // Verifica pela URL - incluindo a nova página de código
+      if (currentUrl.includes('/challenge') ||
+        currentUrl.includes('/auth_platform/codeentry') ||
+        currentUrl.includes('/accounts/challenge')) {
+        return true;
+      }
+
+      // Verifica por elementos da página de desafio
+      const challengeElements = [
+        'h2', // Título do desafio
+        '[data-testid="challenge-form"]', // Formulário de desafio
+        '.challenge-form', // Classe de desafio
+        'input[name="security_code"]', // Campo de código de segurança
+        'input[name="verification_code"]', // Campo de código de verificação
+        '.recaptcha-checkbox', // reCAPTCHA
+        '#recaptcha', // reCAPTCHA alternativo
+        '[data-testid="confirmationCodeInput"]' // Input de código de confirmação
+      ];
+
+      for (const selector of challengeElements) {
+        const element = await this.page.$(selector);
+        if (element) {
+          // Para elementos de texto, verifica o conteúdo
+          if (selector === 'h2') {
+            const titleText = await this.page.evaluate(el => el.textContent, element);
+            if (titleText && (titleText.includes('confirm') ||
+              titleText.includes('verificar') ||
+              titleText.includes('código') ||
+              titleText.includes('security') ||
+              titleText.includes('challenge'))) {
+              return true;
+            }
+          } else {
+            return true;
+          }
+        }
+      }
+
+      return false;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Verifica se o captcha/desafio foi completado com sucesso
+   */
+  private async isChallengeCompleted(): Promise<boolean> {
+    if (!this.page) return false;
+
+    try {
+      const currentUrl = this.page.url();
+
+      // Se não estamos mais na página de challenge ou codeentry, provavelmente foi completado
+      if (!currentUrl.includes('/challenge') &&
+        !currentUrl.includes('/auth_platform/codeentry') &&
+        !currentUrl.includes('/accounts/challenge')) {
+        // Verifica se estamos em uma página válida do Instagram
+        if (currentUrl.includes('instagram.com') &&
+          (currentUrl.endsWith('/') ||
+            currentUrl.includes('/feed') ||
+            currentUrl.includes('/accounts') ||
+            currentUrl.includes('/direct') ||
+            currentUrl.includes('/explore') ||
+            (!currentUrl.includes('/challenge') &&
+              !currentUrl.includes('/auth_platform/codeentry')))) {
+          return true;
+        }
+      }
+
+      // Verifica por elementos que indicam conclusão do captcha
+      const completionIndicators = [
+        '.recaptcha-checkbox-checkmark', // reCAPTCHA completado
+        '[data-testid="challenge-success"]', // Possível indicador de sucesso
+        'button[type="submit"]:not([disabled])', // Botão de submit habilitado
+        '.challenge-success', // Classe de sucesso
+        '[role="button"]:has-text("Continue")', // Botão continuar
+        '[role="button"]:has-text("Submit")', // Botão enviar
+        '[role="button"]:has-text("Continuar")', // Botão continuar em português
+        '[role="button"]:has-text("Enviar")', // Botão enviar em português
+        'button:has-text("Continue")', // Botão continuar
+        'button:has-text("Submit")', // Botão enviar
+        'button:has-text("Continuar")', // Botão continuar em português
+        'button:has-text("Enviar")', // Botão enviar em português
+      ];
+
+      for (const selector of completionIndicators) {
+        const element = await this.page.$(selector);
+        if (element) {
+          console.log(`✅ Indicador de conclusão encontrado: ${selector}`);
+          return true;
+        }
+      }
+
+      // Verifica se não há mais elementos de desafio na página
+      const challengeElements = await this.page.$$('[class*="challenge"], [class*="captcha"], .recaptcha-checkbox');
+      if (challengeElements.length === 0) {
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.log('Erro ao verificar conclusão do desafio:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Lida com a página de desafio/captcha do Instagram
+   * Este método pausará a execução e aguardará intervenção manual
+   */
+  private async handleChallengePage(): Promise<void> {
+    const currentUrl = this.page?.url() || '';
+
+    if (currentUrl.includes('/auth_platform/codeentry')) {
+      console.log('📱 Página de verificação de código detectada!');
+      console.log('📍 URL atual:', currentUrl);
+      console.log('⏳ Por favor, insira o código de verificação que foi enviado para seu dispositivo...');
+      console.log('💡 Verifique seu SMS, email ou app autenticador e insira o código na página.');
+    } else {
+      console.log('🚨 Desafio/Captcha do Instagram detectado!');
+      console.log('📍 URL atual:', currentUrl);
+      console.log('⏳ Por favor, resolva o desafio manualmente no navegador...');
+      console.log('💡 A automação continuará assim que você completar o desafio.');
+    }
+
+    // Tira screenshot para debug
+    await this.takeScreenshot('challenge-detected');
+
+    // Aguarda o usuário resolver o desafio
+    let attempts = 0;
+    const maxAttempts = 300; // 25 minutos máximo de espera
+
+    while (attempts < maxAttempts) {
+      await this.randomDelay(3000, 5000); // Aguarda 3-5 segundos entre verificações
+
+      // Verifica se o desafio foi completado
+      const challengeCompleted = await this.isChallengeCompleted();
+      if (challengeCompleted) {
+        console.log('✅ Desafio completado com sucesso!');
+        await this.takeScreenshot('challenge-completed');
+
+        // Aguarda um pouco mais para garantir que a página carregou completamente
+        await this.randomDelay(2000, 4000);
+
+        // Verifica se há botões para clicar após completar o captcha
+        await this.handlePostChallengeActions();
+
+        return;
+      }
+
+      attempts++;
+
+      if (attempts % 20 === 0) { // A cada minuto aproximadamente
+        const minutesElapsed = Math.floor(attempts * 4 / 60);
+        console.log(`⏳ Ainda aguardando conclusão do desafio... (${minutesElapsed} minutos decorridos)`);
+
+        if (currentUrl.includes('/auth_platform/codeentry')) {
+          console.log('💡 Dica: Verifique seu SMS, email ou app autenticador para o código de verificação.');
+        } else {
+          console.log('💡 Dica: Certifique-se de completar todos os passos do desafio, incluindo clicar em "Continue" ou "Submit" se necessário.');
+        }
+      }
+    }
+
+    throw new Error('Timeout do desafio: Por favor, resolva o desafio do Instagram manualmente e tente novamente.');
+  }
+
+  /**
+    * Lida com ações após completar o captcha (clicar em botões de continuação)
+    */
+  private async handlePostChallengeActions(): Promise<void> {
+    if (!this.page) return;
+
+    try {
+      const currentUrl = this.page.url();
+
+      // Lista de possíveis botões para clicar após completar o captcha
+      const buttonSelectors = [
+        'button[type="submit"]',
+        'button:has-text("Continue")',
+        'button:has-text("Submit")',
+        'button:has-text("Continuar")',
+        'button:has-text("Enviar")',
+        'button:has-text("Confirmar")',
+        'button:has-text("Próximo")',
+        'button:has-text("Next")',
+        '[role="button"]:has-text("Continue")',
+        '[role="button"]:has-text("Submit")',
+        '[role="button"]:has-text("Continuar")',
+        '[role="button"]:has-text("Enviar")',
+        '[role="button"]:has-text("Confirmar")',
+        'input[type="submit"]',
+        '.challenge-submit-button',
+        '[data-testid="challenge-submit"]',
+        '[data-testid="confirmationCodeSubmit"]',
+        'button[data-testid="confirmationCodeSubmit"]'
+      ];
+
+      // Se estamos na página de código, procura especificamente por botões de confirmação
+      if (currentUrl.includes('/auth_platform/codeentry')) {
+        console.log('🔍 Procurando botão de confirmação de código...');
+
+        // Aguarda um pouco para garantir que o código foi inserido
+        await this.randomDelay(2000, 3000);
+
+        // Verifica se há um campo de código preenchido
+        const codeInput = await this.page.$('input[name="security_code"], input[name="verification_code"], [data-testid="confirmationCodeInput"]');
+        if (codeInput) {
+          const codeValue = await this.page.evaluate(el => (el as HTMLInputElement).value, codeInput);
+          if (codeValue && codeValue.length >= 4) {
+            console.log('✅ Código detectado, procurando botão de envio...');
+          }
+        }
+      }
+
+      for (const selector of buttonSelectors) {
+        try {
+          const button = await this.page.$(selector);
+          if (button) {
+            // Verifica se o botão está visível e habilitado
+            const isVisible = await this.page.evaluate((el) => {
+              const rect = el.getBoundingClientRect();
+              const isHTMLElement = el instanceof HTMLElement;
+              const disabled = isHTMLElement ? (el as HTMLInputElement | HTMLButtonElement).disabled : false;
+              return rect.width > 0 && rect.height > 0 && !disabled;
+            }, button);
+
+            if (isVisible) {
+              console.log(`🔘 Clicando no botão: ${selector}`);
+              await button.click();
+              await this.randomDelay(3000, 5000);
+
+              // Verifica se a página mudou após o clique
+              const newUrl = this.page.url();
+              if (newUrl !== currentUrl) {
+                console.log('✅ Página alterada após clique, continuando...');
+                break;
+              }
+            }
+          }
+        } catch (error) {
+          // Continua tentando outros seletores
+        }
+      }
+
+      // Aguarda um pouco para a página processar
+      await this.randomDelay(3000, 5000);
+
+    } catch (error) {
+      console.log('Erro ao lidar com ações pós-desafio:', error);
+    }
+  }
+
+  /**
+   * Carrega cookies salvos
+   */
+  private async loadCookies(): Promise<boolean> {
+    if (!this.page) return false;
+
+    try {
+      if (fs.existsSync(this.cookiesPath)) {
+        const cookies: Protocol.Network.Cookie[] = JSON.parse(fs.readFileSync(this.cookiesPath, 'utf8'));
+        await this.page.setCookie(...cookies);
+        return true;
+      }
+    } catch (error) {
+      console.warn('⚠️ Erro ao carregar cookies:', error);
+    }
+
+    return false;
+  }
+
+  /**
+   * Salva cookies da sessão atual
+   */
+  private async saveCookies(): Promise<void> {
+    if (!this.page) return;
+
+    try {
+      const cookies = await this.page.cookies();
+      fs.writeFileSync(this.cookiesPath, JSON.stringify(cookies, null, 2));
+      console.log('🍪 Cookies salvos com sucesso');
+    } catch (error) {
+      console.warn('⚠️ Erro ao salvar cookies:', error);
+    }
+  }
+
+  /**
+   * Simula digitação humana
+   */
+  private async humanType(selector: string, text: string): Promise<void> {
+    if (!this.page) return;
+
+    await this.page.focus(selector);
+    await this.page.keyboard.type(text, { delay: this.randomBetween(50, 150) });
+  }
+
+  /**
+   * Gera delay aleatório para simular comportamento humano
+   */
+  private async randomDelay(min: number = 1000, max: number = 3000): Promise<void> {
+    const delay = this.randomBetween(min, max);
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+
+  /**
+   * Gera número aleatório entre min e max
+   */
+  private randomBetween(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  /**
+   * Tira screenshot para debug
+   */
+  private async takeScreenshot(name: string): Promise<void> {
+    if (!this.page) return;
+
+    try {
+      const screenshotPath = path.join(process.cwd(), 'puppeteer-cache', `screenshot-${name}-${Date.now()}.png`);
+      await this.page.screenshot({ path: screenshotPath, fullPage: true });
+      console.log(`📸 Screenshot salvo: ${screenshotPath}`);
+    } catch (error) {
+      console.warn('⚠️ Erro ao tirar screenshot:', error);
+    }
+  }
+
+  /**
+   * Curte um post
+   */
+  async likePost(postId: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`❤️ Curtindo post: https://www.instagram.com/p/${postId}/`);
+
+      await this.page.goto(`https://www.instagram.com/p/${postId}/`, { waitUntil: 'networkidle2' });
+      await this.randomDelay(2000, 4000);
+
+      const likeSvgs = await this.page.$$('svg[aria-label="Curtir"][height="24"][width="24"]');
+
+      for (const svg of likeSvgs) {
+        // Sobe para o botão real
+        const likeButton = await svg.evaluateHandle((el: Element) => el.closest('div[role="button"]'));
+        if (likeButton) {
+          const visible = await (likeButton as ElementHandle<Element>).evaluate(
+            (el: Element) => !!(el as HTMLElement).offsetWidth && !!(el as HTMLElement).offsetHeight
+          );
+          if (visible) {
+            // Clique no contexto do navegador
+            await this.page.evaluate((btn: Element | null) => {
+              if (btn) {
+                (btn as HTMLElement).click();
+              }
+            }, likeButton);
+            await this.randomDelay(1000, 2000);
+            console.log('✅ Post curtido com sucesso');
+            return true;
+          }
+        }
+      }
+
+      console.log('⚠️ Post já foi curtido ou botão não encontrado');
+      return false;
+
+    } catch (error) {
+      console.error('❌ Erro ao curtir post:', error);
+      await this.takeScreenshot('like-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Comenta em um post
+   */
+  async commentPost(postId: string, comment: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`💬 Comentando no post: ${postId}`);
+
+      await this.page.goto(`https://www.instagram.com/p/${postId}/`, { waitUntil: 'networkidle2' });
+      await this.randomDelay(2000, 4000);
+
+      // Procura pelo campo de comentário
+      const commentField = await this.page.$('textarea[aria-label="Adicione um comentário..."], textarea[aria-label="Add a comment..."]');
+
+      if (commentField) {
+        await commentField.click();
+        await this.randomDelay(500, 1000);
+
+        await this.humanType('textarea[aria-label="Adicione um comentário..."], textarea[aria-label="Add a comment..."]', comment);
+        await this.randomDelay(1000, 2000);
+
+        // Procura pelo botão de publicar (texto "Postar")
+        const [publishButton] = await this.page.$x('//div[@role="button" and contains(text(), "Postar")]');
+
+        if (publishButton) {
+          await this.page.evaluate((el) => (el as HTMLElement).click(), publishButton);
+          await this.randomDelay(2000, 3000);
+          console.log('✅ Comentário publicado com sucesso');
+          return true;
+        } else {
+          console.log('⚠️ Botão "Postar" não encontrado');
+          return false;
+        }
+      }
+
+      console.log('⚠️ Não foi possível comentar no post');
+      return false;
+
+    } catch (error) {
+      console.error('❌ Erro ao comentar post:', error);
+      await this.takeScreenshot('comment-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Envia mensagem direta
+   */
+  async sendDirectMessage(userId: string, message: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`📩 Enviando mensagem para: ${userId}`);
+
+      // Vai para a inbox
+      await this.page.goto('https://www.instagram.com/direct/inbox/', { waitUntil: 'networkidle2' });
+      await this.randomDelay(2000, 4000);
+
+      // Clica em "Enviar mensagem"
+      const [newMessageButton] = await this.page.$x('//div[@role="button" and contains(text(), "Enviar mensagem")]');
+      if (newMessageButton) {
+        await (newMessageButton as ElementHandle<Element>).click();
+        await this.randomDelay(1000, 2000);
+      }
+
+      // Campo de pesquisa
+      const searchField = await this.page.$('input[placeholder="Pesquisar..."], input[placeholder="Search..."]');
+      if (!searchField) {
+        console.log('⚠️ Campo de pesquisa não encontrado');
+        return false;
+      }
+      await this.humanType('input[placeholder="Pesquisar..."], input[placeholder="Search..."]', userId);
+      await this.randomDelay(4000, 6000);
+
+      // Busca o resultado exato pelo username dentro da div pai específica
+      const userClicked = await this.page.evaluate((userId) => {
+        const parentDiv = document.querySelector('.html-div.xdj266r.x14z9mp.xat24cr.x1lziwak.xexx8yu.xyri2b.x18d9i69.x1c1uobl.x9f619.xjbqb8w.x78zum5.x15mokao.x1ga7v0g.x16uus16.xbiv7yw.x1uhb9sk.x6ikm8r.x1rife3k.x1iyjqo2.x2lwn1j.xeuugli.xdt5ytf.xqjyukv.x1qjc9v5.x1oa3qoh.x1nhvcw1');
+
+        if (parentDiv) {
+          const targetElement = Array.from(parentDiv.querySelectorAll('span'))
+            .find(el => el.textContent?.trim() === userId);
+
+          if (targetElement) {
+            // Clique no elemento correto
+            (targetElement as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      }, userId);
+
+      if (!userClicked) {
+        console.log('⚠️ Usuário não encontrado na div pai específica');
+        return false;
+      }
+
+      await this.randomDelay(1000, 2000);
+
+      // Clica em "Bate-papo"
+      const [chatButton] = await this.page.$x('//div[@role="button" and contains(text(), "Bate-papo")]');
+      if (chatButton) {
+        await this.randomDelay(2000, 3000);
+        await (chatButton as ElementHandle<Element>).click();
+      }
+
+      // Loop até o campo de mensagem aparecer
+      let messageField: ElementHandle<Element> | null = null;
+      const maxRetries = 10;
+      let retries = 0;
+
+      while (!messageField && retries < maxRetries) {
+        messageField = await this.page.$('div[contenteditable="true"][role="textbox"]');
+        if (!messageField) {
+          await this.randomDelay(500, 1000); // espera antes de tentar de novo
+          retries++;
+        }
+      }
+
+      if (!messageField) {
+        console.log('⚠️ Campo de mensagem não encontrado após várias tentativas');
+        return false;
+      }
+      await messageField.click();
+      await this.randomDelay(1000, 2000);
+      await this.page.keyboard.type(message, { delay: 50 }); // digitação humana
+
+      // Envia a mensagem
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(2000, 3000);
+
+      console.log('✅ Mensagem enviada com sucesso');
+      return true;
+
+    } catch (error) {
+      console.error('❌ Erro ao enviar mensagem:', error);
+      await this.takeScreenshot('message-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Envia mensagem diretamente para um chat específico usando o ID do chat
+   */
+  async replyMessage(chatId: string, message: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`📩 Enviando mensagem direta para chat: ${chatId}`);
+
+      const targetUrl = `https://www.instagram.com/direct/t/${chatId}/`;
+      const currentUrl = this.page.url();
+
+      // Verifica se já está na URL do chat
+      if (!currentUrl.includes(`/direct/t/${chatId}/`)) {
+        console.log(`🔄 Navegando para o chat: ${targetUrl}`);
+        await this.page.goto(targetUrl, { waitUntil: 'networkidle2' });
+        await this.randomDelay(2000, 4000);
+      } else {
+        console.log('✅ Já está na URL do chat');
+      }
+
+      // Loop até o campo de mensagem aparecer
+      let messageField: ElementHandle<Element> | null = null;
+      const maxRetries = 10;
+      let retries = 0;
+
+      while (!messageField && retries < maxRetries) {
+        messageField = await this.page.$('div[contenteditable="true"][role="textbox"]');
+        if (!messageField) {
+          if(retries >= 5){
+            await this.page.goto(targetUrl, { waitUntil: 'networkidle2' });
+            await this.randomDelay(2000, 3000); // espera antes de tentar de novo
+          }
+          await this.randomDelay(500, 1000); // espera antes de tentar de novo
+          retries++;
+        }
+      }
+
+      if (!messageField) {
+        console.log('⚠️ Campo de mensagem não encontrado após várias tentativas');
+        return false;
+      }
+      
+      await messageField.click();
+      await this.randomDelay(1000, 2000);
+      await this.page.keyboard.type(message, { delay: 50 }); // digitação humana
+
+      // Envia a mensagem
+      await this.page.keyboard.press('Enter');
+      await this.randomDelay(2000, 3000);
+
+      console.log('✅ Mensagem enviada com sucesso');
+      return true;
+
+    } catch (error) {
+      console.error('❌ Erro ao enviar mensagem direta:', error);
+      await this.takeScreenshot('direct-message-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Posta uma foto
+   */
+  async postPhoto(imagePath: string, caption?: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`📸 Postando foto: ${imagePath}`);
+
+      await this.page.goto('https://www.instagram.com/', { waitUntil: 'networkidle2' });
+      await this.randomDelay(2000, 4000);
+
+      // Clica no botão de criar post
+      const [createButton] = await this.page.$$('svg[aria-label="Novo post"]');
+      console.log("createButton", createButton);
+      await this.page.evaluate((el) => {
+        (el as HTMLElement).style.border = '3px solid red';
+      }, createButton);
+      if (createButton) {
+        await createButton.click();
+        //aria-label="Postar"
+        const [postButton] = await this.page.$$('svg[aria-label="Postar"]');
+        console.log("postButton", postButton);
+        if (postButton) {
+          await postButton.click();
+        }
+
+        // await this.page.evaluate((el) => (el as HTMLElement).click(), createButton);
+        await this.randomDelay(2000, 3000);
+
+        // Upload da imagem
+        const fileInput = await this.page.$('input[type="file"]');
+        if (fileInput) {
+          await fileInput.uploadFile(imagePath);
+          await this.randomDelay(3000, 5000);
+
+          // Clica em "Avançar"
+          let [nextButton] = await this.page.$x('//div[@role="button" and contains(text(), "Avançar")]');
+          if (nextButton) {
+            await this.page.evaluate((el) => (el as HTMLElement).click(), nextButton);
+            await this.randomDelay(2000, 3000);
+
+            // Clica em "Avançar" novamente (filtros)
+            [nextButton] = await this.page.$x('//div[@role="button" and contains(text(), "Avançar")]');
+            if (nextButton) {
+              await this.page.evaluate((el) => (el as HTMLElement).click(), nextButton);
+              await this.randomDelay(2000, 3000);
+
+              // Adiciona legenda se fornecida
+              const captionField = await this.page.$('div[aria-label="Escreva uma legenda..."][role="textbox"]');
+
+              console.log("captionField", captionField);
+              if (captionField) {
+                await captionField.click({ clickCount: 1 });
+                if (caption) {
+                  await this.page.keyboard.type(caption, { delay: 50 });
+                  await this.randomDelay(1000, 2000);
+                }
+              }
+
+              // Clica em "Compartilhar"
+              const [shareButton] = await this.page.$x('//div[@role="button" and contains(text(), "Compartilhar")]');
+              if (shareButton) {
+                await this.page.evaluate((el) => (el as HTMLElement).click(), shareButton);
+                await this.randomDelay(5000, 8000)
+                console.log('✅ Foto postada com sucesso');
+                return true;
+              }
+            }
+          }
+        }
+      }
+
+      console.log('⚠️ Não foi possível postar a foto');
+      return false;
+
+    } catch (error) {
+      console.error('❌ Erro ao postar foto:', error);
+      await this.takeScreenshot('post-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Segue um usuário
+   */
+  async followUser(userId: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`👥 Seguindo usuário: ${userId}`);
+
+      await this.page.goto(`https://www.instagram.com/${userId}/`, { waitUntil: 'networkidle2' });
+      await this.randomDelay(2000, 4000);
+
+      // Procura pelo botão de seguir
+      const [followButton] = await this.page.$x('//button[.//div[contains(text(), "Seguir")]]');
+
+
+      if (followButton) {
+        await this.page.evaluate((el) => (el as HTMLElement).click(), followButton);
+        await this.randomDelay(3000, 5000);
+        console.log('✅ Usuário seguido com sucesso');
+        return true;
+      } else {
+        console.log('⚠️ Usuário já está sendo seguido ou botão não encontrado');
+        return false;
+      }
+
+    } catch (error) {
+      console.error('❌ Erro ao seguir usuário:', error);
+      await this.takeScreenshot('follow-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Para de seguir um usuário
+   */
+  async unfollowUser(userId: string): Promise<boolean> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    try {
+      console.log(`👥 Deixando de seguir usuário: ${userId}`);
+
+      await this.page.goto(`https://www.instagram.com/${userId}/`, { waitUntil: 'networkidle2' });
+      await this.randomDelay(2000, 4000);
+
+      // Procura pelo botão de seguindo
+      const [unfollowButton] = await this.page.$x(`//button[.//div/div[text()="Seguindo"]]`);
+
+      if (unfollowButton) {
+        await this.page.evaluate((el) => (el as HTMLElement).click(), unfollowButton);
+        await this.randomDelay(1000, 2000);
+
+        // Confirma deixar de seguir
+        // Confirma deixar de seguir (XPath aceita OR `|`)
+        const [confirmButton] = await this.page.$x('//span[contains(text(), "Deixar de seguir")] | //span[contains(text(), "Unfollow")]');
+        if (confirmButton) {
+          await this.page.evaluate((el) => (el as HTMLElement).click(), confirmButton);
+          await this.randomDelay(2000, 3000);
+          console.log('✅ Deixou de seguir usuário com sucesso');
+          return true;
+        }
+      } else {
+        console.log('⚠️ Usuário não está sendo seguido ou botão não encontrado');
+        return false;
+      }
+
+      return false;
+
+    } catch (error) {
+      console.error('❌ Erro ao deixar de seguir usuário:', error);
+      await this.takeScreenshot('unfollow-error');
+      throw error;
+    }
+  }
+
+  /**
+   * Monitora novas mensagens na caixa de entrada e requests
+   */
+  async monitorNewMessages(options: {
+    includeRequests?: boolean;
+    onNewMessage?: (data: {
+      username: string;
+      profileImageUrl: string;
+      chatId: string;
+      messages: Array<{
+        author: string;
+        text: string;
+        fromMe: boolean;
+      }>;
+    }) => void;
+  } = {}): Promise<void> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    // Desabilita monitoramento de posts quando mensagens for ativado
+    this.isMonitoringNewPostsFromUsers = false;
+
+    if (!this.isMonitoringNewMessages) {
+      console.log("Monitoramento pausado");
+      return;
+    }
+
+    const {
+      includeRequests = true,
+      onNewMessage
+    } = options;
+
+    console.log('📬 Iniciando monitoramento de novas mensagens...');
+    console.log(`📥 Monitorar requests: ${includeRequests ? 'Sim' : 'Não'}`);
+    const url = 'https://www.instagram.com/direct/inbox/';
+    await this.page!.goto(url, { waitUntil: 'networkidle2' });
+    while (this.isMonitoringNewMessages) {
+      if (!this.page!.url().includes("/direct/inbox/")) {
+        try {
+          await this.page!.goto(url, { waitUntil: 'networkidle2' });
+          console.log("Navegou para o inbox");
+          await this.randomDelay(2000, 4000);
+        } catch (err) {
+          console.error("Erro ao navegar:", err);
+        }
+      }
+      try {
+
+        // Localiza conversas com "Unread"
+        const unreadSelector = '//div[contains(text(), "Unread")]'; // div que contém "Unread"
+
+        await this.page!.waitForXPath(unreadSelector, { timeout: 0 });
+        console.log('Nova conversa não lida detectada!');
+
+        // Seleciona todos os elementos que correspondem ao seletor
+        const unreadElements = await this.page!.$x(unreadSelector);
+        console.log('Número de conversas não lidas:', unreadElements.length);
+
+        for (const conv of unreadElements) {
+          try {
+            // Clica na conversa
+            await (conv as ElementHandle<Element>).click();
+            // await this.page!.waitForNavigation({ waitUntil: 'networkidle2' });
+            await this.randomDelay(2000, 2500)
+            console.log('📥 Aguardando carregamento da nova página...', conv);
+            // Recupera a URL atual
+            const currentUrl = this.page!.url();
+            if (currentUrl.includes("/direct/t/")) {
+              const chatId = currentUrl.split("/direct/t/")[1].replace("/", "");
+              console.log(`✅ Abriu conversa. Chat ID: ${chatId}`);
+
+              console.log("🔍 Iniciando extração de dados da conversa...");
+
+              // Primeiro, tenta encontrar a imagem de perfil fora do evaluate
+              let profileImageUrl = "";
+              try {
+                // Tenta diferentes seletores para a imagem de perfil
+                const profileSelectors = [
+                  'a[aria-label^="Open the profile page of"] img',
+                  'img[alt*="profile picture"]',
+                  'img[src*="profile"]',
+                  'header img',
+                  'div[role="banner"] img'
+                ];
+
+                for (const selector of profileSelectors) {
+                  try {
+                    const imgElement = await this.page!.$(selector);
+                    if (imgElement) {
+                      profileImageUrl = await imgElement.evaluate(img => img.getAttribute('src')) || "";
+                      if (profileImageUrl) {
+                        console.log(`✅ Imagem encontrada com seletor: ${selector}`);
+                        console.log(`🖼️ URL da imagem: ${profileImageUrl}`);
+                        break;
+                      }
+                    }
+                  } catch (e) {
+                    // Continua tentando outros seletores
+                  }
+                }
+
+                if (!profileImageUrl) {
+                  console.log("⚠️ Não foi possível encontrar a imagem de perfil com os seletores padrão");
+                  const allImages = await this.page!.$$('img');
+                  console.log(`🔍 Encontradas ${allImages.length} imagens na página`);
+
+                  for (const img of allImages.slice(0, 10)) {
+                    const src = await img.evaluate(el => el.getAttribute('src')) || '';
+                    const alt = await img.evaluate(el => el.getAttribute('alt')) || '';
+                    const srcClean = src.replace(/\s+/g, '').trim();
+
+                    if (srcClean && (
+                      srcClean.includes('profile') ||
+                      alt.toLowerCase().includes('profile') ||
+                      srcClean.includes('avatar') ||
+                      alt.toLowerCase().includes('avatar')
+                    )) {
+                      profileImageUrl = srcClean;
+                      console.log(`✅ Imagem de perfil encontrada:`, profileImageUrl);
+                      break;
+                    }
+                  }
+                }
+              } catch (error) {
+                console.log("❌ Erro ao buscar imagem de perfil:", error);
+              }
+
+              // Extrai o username e as mensagens
+              const conversationData = await this.page!.evaluate(() => {
+                // Seleciona o <a> pelo atributo aria-label que contém "Open the profile page of"
+                const profileLink = document.querySelector('a[aria-label^="Open the profile page of"]');
+                let username = "";
+                if (profileLink) {
+                  // Pega o texto depois de "Open the profile page of "
+                  const label = profileLink.getAttribute("aria-label") || "";
+                  username = label.replace("Open the profile page of ", "").trim();
+                }
+
+                console.log("Username:", username);
+                // Extrai as mensagens
+                const results: Array<{
+                  author: string;
+                  text: string;
+                  fromMe: boolean;
+                }> = [];
+
+                const rows = document.querySelectorAll('div[role="gridcell"][data-scope="messages_table"]');
+                let lastAuthor: string | null = null;
+
+                rows.forEach(row => {
+                  const textEl = row.querySelector('div[dir="auto"]');
+                  const authorEl = row.querySelector('h6 span, h5 span');
+
+                  const text = textEl?.textContent?.trim() || "";
+                  let author = authorEl?.textContent?.trim() || "";
+
+                  let fromMe = false;
+
+                  if (!author) {
+                    // Reaproveita o último autor conhecido
+                    if (row.classList.contains("xyk4ms5")) {
+                      author = "me";
+                      fromMe = true;
+                    } else if (lastAuthor) {
+                      author = lastAuthor;
+                      fromMe = author === "me";
+                    } else {
+                      author = "usuario"; // fallback
+                      fromMe = false;
+                    }
+                  } else {
+                    fromMe = author === "Você enviou" || author === "";
+                    if (fromMe) author = "me";
+                  }
+
+                  // Atualiza o último autor conhecido
+                  lastAuthor = author;
+
+                  if (text) {
+                    results.push({ author, text, fromMe });
+                  }
+                });
+
+
+                return {
+                  username,
+                  messages: results
+                };
+              });
+
+              // console.log(`💬 Conversa com ${conversationData.username} (Chat ID: ${chatId}):`, conversationData.messages);
+              // console.log(`👤 Username extraído: ${conversationData.username}`);
+
+              // Chama o callback se fornecido
+              if (onNewMessage) {
+                onNewMessage({
+                  username: conversationData.username,
+                  profileImageUrl: profileImageUrl,
+                  chatId: chatId,
+                  messages: conversationData.messages
+                });
+              }
+
+            }
+
+            // Pequeno delay antes de processar a próxima
+            await this.randomDelay(2000, 4000);
+          } catch (err) {
+            console.error("❌ Erro ao clicar na conversa:", err);
+          }
+        }
+      } catch (error) {
+        console.error(`Nenhuma nova mensagem detectada, continuando a observação...`);
+      }
+      await this.randomDelay(2000, 4000);
+    }
+  }
+
+  /**
+   * Para o monitoramento de mensagens (método auxiliar)
+   */
+  switchMessagesMonitoring(enabled: boolean): void {
+    if (enabled) {
+      console.log('▶️ Iniciando monitoramento de mensagens...');
+      this.isMonitoringNewMessages = true;
+      // Desabilita monitoramento de posts quando mensagens for ativado
+      this.isMonitoringNewPostsFromUsers = false;
+    } else {
+      console.log('🛑 Parando monitoramento de mensagens...');
+      this.isMonitoringNewMessages = false;
+    }
+    // Nota: O monitoramento para automaticamente quando a instância é fechada
+  }
+
+  getIsMonitoringNewMessages(): boolean {
+    return this.isMonitoringNewMessages;
+  }
+
+  /**
+   * Interface para dados dos posts (definida acima)
+   */
+
+  /**
+   * Monitora novos posts de uma lista de usuários (últimos 10 posts de cada)
+   */
+  async monitorNewPostsFromUsers(options: {
+    usernames: string[];
+    checkInterval?: number;
+    maxExecutions?: number;
+    onNewPosts?: (posts: PostData[], executionCount: number, totalTime: number) => void;
+  }): Promise<void> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    // Desabilita outros monitoramentos
+    this.isMonitoringNewMessages = false;
+    this.isMonitoringNewPostsFromUsers = true;
+
+    const { usernames, checkInterval = 60000, maxExecutions, onNewPosts } = options;
+    
+    console.log('📸 Iniciando monitoramento de posts de usuários...');
+    console.log(`👥 Usuários monitorados: ${usernames.join(', ')}`);
+    console.log(`⏱️ Intervalo de verificação: ${checkInterval / 1000}s`);
+    if (maxExecutions) {
+      console.log(`🔄 Máximo de execuções: ${maxExecutions}`);
+    }
+
+    const seenPosts = new Set<string>();
+    let executionCount = 0;
+    const startTime = Date.now();
+
+    while (this.isMonitoringNewPostsFromUsers && (!maxExecutions || executionCount < maxExecutions)) {
+      executionCount++;
+      try {
+        const allNewPosts: PostData[] = [];
+
+        for (const username of usernames) {
+          if (!this.isMonitoringNewPostsFromUsers) break;
+
+          try {
+            console.log(`🔍 Verificando posts de @${username}...`);
+            
+            // Navega para o perfil do usuário
+            await this.page.goto(`https://www.instagram.com/${username}/`, { 
+              waitUntil: 'networkidle2',
+              timeout: 30000 
+            });
+            await this.randomDelay(2000, 4000);
+
+            // Extrai os últimos 10 posts
+            const posts = await this.page.evaluate((user) => {
+              const postElements = document.querySelectorAll('article a[href*="/p/"]');
+              const results: any[] = [];
+              
+              // Pega os primeiros 10 posts
+              for (let i = 0; i < Math.min(10, postElements.length); i++) {
+                const postLink = postElements[i] as HTMLAnchorElement;
+                const postUrl = postLink.href;
+                
+                // Encontra o container do post para extrair dados
+                const postContainer = postLink.closest('div');
+                if (postContainer) {
+                  // Tenta encontrar informações de tempo, curtidas e comentários
+                  // Nota: Instagram pode ter estruturas diferentes, então usamos seletores genéricos
+                  const timeElement = postContainer.querySelector('time');
+                  const timeAgo = timeElement ? timeElement.getAttribute('datetime') || timeElement.textContent || 'Desconhecido' : 'Desconhecido';
+                  
+                  results.push({
+                    url: postUrl,
+                    timeAgo: timeAgo,
+                    likes: 0, // Será preenchido ao visitar o post
+                    comments: 0, // Será preenchido ao visitar o post
+                    username: user
+                  });
+                }
+              }
+              
+              return results;
+            }, username);
+
+            // Para cada post, visita para obter curtidas e comentários
+            for (const post of posts.slice(0, 3)) { // Limita a 3 posts por usuário para não sobrecarregar
+              if (!this.isMonitoringNewPostsFromUsers) break;
+              
+              const postId = post.url.split('/p/')[1]?.split('/')[0];
+              if (!postId || seenPosts.has(postId)) continue;
+              
+              try {
+                await this.page.goto(post.url, { 
+                  waitUntil: 'networkidle2',
+                  timeout: 20000 
+                });
+                await this.randomDelay(1500, 3000);
+
+                // Extrai curtidas e comentários
+                const postStats = await this.page.evaluate(() => {
+                  let likes = 0;
+                  let comments = 0;
+                  
+                  // Tenta encontrar curtidas
+                  const likeElements = document.querySelectorAll('span, a');
+                  for (const element of Array.from(likeElements)) {
+                    const text = element.textContent || '';
+                    if (text.includes('curtida') || text.includes('like')) {
+                      const match = text.match(/([\d,\.]+)/);
+                      if (match) {
+                        likes = parseInt(match[1].replace(/[,\.]/g, '')) || 0;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  // Tenta encontrar comentários
+                  const commentElements = document.querySelectorAll('span, a');
+                  for (const element of Array.from(commentElements)) {
+                    const text = element.textContent || '';
+                    if (text.includes('comentário') || text.includes('comment')) {
+                      const match = text.match(/([\d,\.]+)/);
+                      if (match) {
+                        comments = parseInt(match[1].replace(/[,\.]/g, '')) || 0;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  // Método alternativo: conta elementos de comentário visíveis
+                  if (comments === 0) {
+                    const commentDivs = document.querySelectorAll('div[role="button"] span');
+                    comments = Math.max(0, commentDivs.length - 5); // Aproximação
+                  }
+                  
+                  return { likes, comments };
+                });
+
+                post.likes = postStats.likes;
+                post.comments = postStats.comments;
+                
+                seenPosts.add(postId);
+                allNewPosts.push(post);
+                
+                console.log(`📊 Post de @${username}: ${post.likes} curtidas, ${post.comments} comentários`);
+                
+              } catch (error) {
+                console.warn(`⚠️ Erro ao processar post ${post.url}:`, error);
+              }
+            }
+            
+          } catch (error) {
+            console.warn(`⚠️ Erro ao verificar posts de @${username}:`, error);
+          }
+          
+          await this.randomDelay(3000, 5000); // Delay entre usuários
+        }
+
+        const currentTime = Date.now();
+        const totalTime = currentTime - startTime;
+        
+        // Chama callback se houver novos posts
+        if (allNewPosts.length > 0 && onNewPosts) {
+          onNewPosts(allNewPosts, executionCount, totalTime);
+        }
+        
+        console.log(`✅ Verificação ${executionCount}${maxExecutions ? `/${maxExecutions}` : ''} completa. ${allNewPosts.length} novos posts encontrados.`);
+        console.log(`⏱️ Tempo total decorrido: ${Math.round(totalTime / 1000)}s`);
+        
+      } catch (error) {
+        console.error('❌ Erro no monitoramento de posts:', error);
+      }
+      
+      // Aguarda próxima verificação
+      await this.randomDelay(checkInterval, checkInterval + 5000);
+    }
+  }
+
+  /**
+   * Para/inicia o monitoramento de posts de usuários
+   */
+  switchPostsMonitoring(enabled: boolean): void {
+    if (enabled) {
+      console.log('▶️ Iniciando monitoramento de posts...');
+      this.isMonitoringNewPostsFromUsers = true;
+      // Desabilita monitoramento de mensagens
+      this.isMonitoringNewMessages = false;
+    } else {
+      console.log('🛑 Parando monitoramento de posts...');
+      this.isMonitoringNewPostsFromUsers = false;
+    }
+  }
+
+  /**
+   * Retorna se está monitorando posts de usuários
+   */
+  getIsMonitoringNewPostsFromUsers(): boolean {
+    return this.isMonitoringNewPostsFromUsers;
+  }
+
+  /**
+   * Fecha o navegador e limpa recursos
+   */
+  async close(): Promise<void> {
+    try {
+      if (this.page) {
+        await this.page.close();
+        this.page = null;
+      }
+
+      if (this.browser) {
+        await this.browser.close();
+        this.browser = null;
+      }
+
+      console.log('🔒 Instagram Automator fechado com sucesso');
+    } catch (error) {
+      console.error('❌ Erro ao fechar navegador:', error);
+    }
+  }
+
+  /**
+   * Verifica se está logado
+   */
+  get loggedIn(): boolean {
+    return this.isLoggedIn;
+  }
+
+  /**
+   * Obtém a página atual (para uso avançado)
+   */
+  get currentPage(): Page | null {
+    return this.page;
+  }
+
+  /**
+   * Obtém o navegador atual (para uso avançado)
+   */
+  get currentBrowser(): Browser | null {
+    return this.browser;
+  }
+
+  /**
+   * Verifica se o navegador ainda está conectado e ativo
+   */
+  async isBrowserConnected(): Promise<boolean> {
+    try {
+      if (!this.browser) {
+        return false;
+      }
+
+      // Tenta obter as páginas do navegador para verificar se ainda está conectado
+      const pages = await this.browser.pages();
+      return pages.length > 0;
+    } catch (error) {
+      // Se houver erro, significa que o navegador foi fechado
+      console.log('🔍 Navegador desconectado detectado:', (error as Error).message);
+      this.browser = null;
+      this.page = null;
+      this.isLoggedIn = false;
+      return false;
+    }
+  }
+
+  /**
+   * Verifica se a página ainda está ativa
+   */
+  async isPageActive(): Promise<boolean> {
+    try {
+      if (!this.page) {
+        return false;
+      }
+
+      // Tenta verificar se a página ainda está ativa
+      await this.page.url();
+      return true;
+    } catch (error) {
+      // Se houver erro, significa que a página foi fechada
+      console.log('🔍 Página desconectada detectada:', (error as Error).message);
+      this.page = null;
+      return false;
+    }
+  }
+}

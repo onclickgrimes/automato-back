@@ -1,0 +1,85 @@
+# Dependências
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Arquivos compilados
+dist/
+build/
+*.tsbuildinfo
+
+# Cache do Puppeteer e dados sensíveis
+puppeteer-cache/
+cookies-*.json
+screenshot-*.png
+user-data/
+
+# Logs
+logs/
+*.log
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Arquivos do sistema
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Arquivos temporários
+*.tmp
+*.temp
+
+# Arquivos de teste
+coverage/
+.nyc_output/
+
+# Arquivos de exemplo com credenciais reais
+example-with-credentials.ts
+test-credentials.ts
+
+# Arquivos de imagem de exemplo
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.webp
+
+# Arquivos de backup
+*.bak
+*.backup
+*.sqlite
+# Arquivos do Windows
+ehthumbs.db
+desktop.ini
+
+# Arquivos do macOS
+.AppleDouble
+.LSOverride
+
+# Arquivos do Linux
+*~
+
+# Arquivos do Puppeteer
+.local-chromium/
+
+# Arquivos de configuração local
+config.local.json
+settings.local.json
