@@ -1,4 +1,5 @@
 import { Instagram, InstagramConfig } from './src';
+import { PostsDatabase } from './src/PostsDatabase';
 import knex from 'knex';
 
 // Interfaces para Workflow
@@ -164,14 +165,38 @@ export class WorkflowProcessor {
         }
         const postOptions = {
           checkInterval: action.params.checkInterval || 10000,
-          onNewPost: action.params.onNewPost || ((data: any) => {
-            console.log('📝 Novo post detectado:', data);
+          onNewPosts: action.params.onNewPost || (async (posts: any[]) => {
+            console.log(`📝 ${posts.length} novos posts detectados`);
+            if (posts.length > 0) {
+              try {
+                const resultado = await PostsDatabase.savePosts(posts, username);
+                console.log(`💾 Salvamento: ${resultado.saved} novos, ${resultado.duplicates} atualizados`);
+              } catch (error: any) {
+                console.error('❌ Erro ao salvar posts no banco:', error.message);
+              }
+            }
           })
         };
-        return await instance.monitorNewPostsFromUsers({
+        const collectedPosts = await instance.monitorNewPostsFromUsers({
           usernames: [action.params.username],
           ...postOptions
         });
+        
+        // Salva todos os posts coletados no final
+        if (collectedPosts.length > 0) {
+          try {
+            const resultadoFinal = await PostsDatabase.savePosts(collectedPosts, username);
+            console.log(`💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
+          } catch (error: any) {
+            console.error('❌ Erro ao salvar posts coletados no banco:', error.message);
+          }
+        }
+        
+        return { 
+          success: true, 
+          postsCollected: collectedPosts.length,
+          posts: collectedPosts 
+        };
 
       case 'delay':
         if (!action.params.duration) {

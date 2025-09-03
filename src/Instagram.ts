@@ -1299,7 +1299,7 @@ export class Instagram {
     checkInterval?: number;
     maxExecutions?: number;
     onNewPosts?: (posts: PostData[], executionCount: number, totalTime: number) => void;
-  }): Promise<void> {
+  }): Promise<PostData[]> {
     if (!this.isLoggedIn || !this.page) {
       throw new Error('Usuário não está logado');
     }
@@ -1318,6 +1318,7 @@ export class Instagram {
     }
 
     const seenPosts = new Set<string>();
+    const allCollectedPosts: PostData[] = [];
     let executionCount = 0;
     let consecutiveErrors = 0;
     const maxConsecutiveErrors = 3;
@@ -1510,6 +1511,7 @@ export class Instagram {
 
                   seenPosts.add(postData.id);
                   allNewPosts.push(postData);
+                  allCollectedPosts.push(postData);
 
                   const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
                   console.log(
@@ -1582,6 +1584,8 @@ export class Instagram {
       // Aguarda próxima verificação
       await this.randomDelay(checkInterval, checkInterval + 5000);
     }
+    
+    return allCollectedPosts;
   }
 
   /**
