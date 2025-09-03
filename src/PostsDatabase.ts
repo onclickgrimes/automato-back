@@ -37,6 +37,8 @@ export interface InstagramPostRecord {
   likes: number;
   comments: number;
   post_date?: string;
+  liked_by_users?: string[];
+  followed_likers?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -52,9 +54,9 @@ export class PostsDatabase {
 
     for (const post of posts) {
       try {
-        // Extrai post_id da URL (formato: /p/POST_ID/)
-        const postIdMatch = post.url.match(/\/p\/([^/]+)\//); 
-        const postId = postIdMatch ? postIdMatch[1] : post.url;
+        // Extrai post_id da URL (formato: /p/POST_ID/ ou /reel/POST_ID/)
+        const postIdMatch = post.url.match(/\/(p|reel)\/([^/]+)\//); 
+        const postId = postIdMatch ? postIdMatch[2] : post.url;
 
         // Verifica se o post já existe
         const existingPost = await db('instagram_posts')
@@ -69,6 +71,8 @@ export class PostsDatabase {
               likes: post.likes,
               comments: post.comments,
               post_date: post.postDate,
+              liked_by_users: post.likedByUsers ? JSON.stringify(post.likedByUsers) : null,
+              followed_likers: post.followedLikers || false,
               updated_at: new Date().toISOString()
             });
           duplicates++;
@@ -82,6 +86,8 @@ export class PostsDatabase {
             likes: post.likes,
             comments: post.comments,
             post_date: post.postDate,
+            liked_by_users: post.likedByUsers ? JSON.stringify(post.likedByUsers) : null,
+            followed_likers: post.followedLikers || false,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           });

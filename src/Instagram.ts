@@ -25,11 +25,12 @@ export interface InstagramCredentials {
 
 export interface PostData {
   url: string;
-  timeAgo: string;
+  username: string;
   likes: number;
   comments: number;
-  username: string;
   postDate?: string;
+  likedByUsers?: string[];
+  followedLikers?: boolean;
 }
 
 export class Instagram {
@@ -1292,6 +1293,68 @@ export class Instagram {
    */
 
   /**
+   * Coleta até 50 usuários que curtiram um post específico
+   */
+  private async getLikedByUsers(postUrl: string): Promise<string[]> {
+    if (!this.page) {
+      throw new Error('Page not initialized');
+    }
+
+    try {
+      // Extrai o ID do post da URL (funciona para /p/ e /reel/)
+      const postIdMatch = postUrl.match(/\/(p|reel)\/([^/]+)\//); 
+      if (!postIdMatch) {
+        throw new Error('URL do post inválida');
+      }
+      
+      const postId = postIdMatch[2];
+      const likedByUrl = `https://www.instagram.com/p/${postId}/liked_by/`;
+      
+      console.log(`🔍 Navegando para página de curtidas: ${likedByUrl}`);
+      
+      // Navega para a página de curtidas
+      await this.page.goto(likedByUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
+      });
+      
+      await this.randomDelay(2000, 3000);
+      
+      // Aguarda o carregamento da lista de usuários
+      try {
+        await this.page.waitForSelector('div.x1rg5ohu:not([class*=" "]) span.xjp7ctv a', { timeout: 10000 });
+      } catch {
+        console.warn('⚠️ Nenhum usuário encontrado na página de curtidas');
+        return [];
+      }
+      
+      // Coleta os usernames usando o seletor fornecido
+      const usernamesThatLikes = await this.page.$$eval(
+        'div.x1rg5ohu:not([class*=" "]) span.xjp7ctv a',
+        (anchors) => anchors.map(a => a.getAttribute('href'))
+      );
+      
+      // Extrai apenas os usernames das URLs e limita a 50
+      const usernames = usernamesThatLikes
+        .map(href => {
+          if (href && href.startsWith('/')) {
+            return href.replace('/', '').replace('/', '');
+          }
+          return null;
+        })
+        .filter(username => username !== null && username.length > 0)
+        .slice(0, 50) as string[];
+      
+      console.log(`✅ Coletados ${usernames.length} usuários que curtiram o post`);
+      return usernames;
+      
+    } catch (error: any) {
+      console.error(`❌ Erro ao coletar curtidores:`, error.message);
+      return [];
+    }
+  }
+
+  /**
    * Monitora novos posts de uma lista de usuários (últimos 10 posts de cada)
    */
   async monitorNewPostsFromUsers(options: {
@@ -1508,6 +1571,21 @@ export class Instagram {
                   postData.likes = stats.likes;
                   postData.comments = stats.comments;
                   postData.postDate = stats.postDate;
+
+                  // Coleta usuários que curtiram o post
+                  try {
+                    const likedByUsers = await this.getLikedByUsers(postData.url);
+                    postData.likedByUsers = likedByUsers;
+                    postData.followedLikers = false; // Inicialmente não seguiu os curtidores
+                    
+                    if (likedByUsers.length > 0) {
+                      console.log(`👥 Coletados ${likedByUsers.length} usuários que curtiram o post`);
+                    }
+                  } catch (likeError: any) {
+                    console.warn(`⚠️ Erro ao coletar curtidores do post ${postData.url}:`, likeError.message);
+                    postData.likedByUsers = [];
+                    postData.followedLikers = false;
+                  }
 
                   seenPosts.add(postData.id);
                   allNewPosts.push(postData);
