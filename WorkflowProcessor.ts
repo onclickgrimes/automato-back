@@ -146,7 +146,35 @@ export class WorkflowProcessor {
         if (!action.params.user || !action.params.message) {
           throw new Error('Parâmetros user e message são obrigatórios para sendDirectMessage');
         }
-        return await instance.sendDirectMessage(action.params.user, action.params.message);
+        
+        // Verificar se já existe uma conversa ativa com este usuário
+        try {
+          const knexInstance = require('knex')({
+            client: 'sqlite3',
+            connection: {
+              filename: `./database_${username}.sqlite`
+            },
+            useNullAsDefault: true
+          });
+          
+          // Buscar chat existente pelo user_id (que é o username do Instagram)
+          const existingChat = await knexInstance('chats')
+            .where('user_id', action.params.user)
+            .first();
+          
+          await knexInstance.destroy();
+          
+          if (existingChat) {
+            console.log(`💬 Conversa existente encontrada para @${action.params.user}, usando replyMessage com chat ID: ${existingChat.id}`);
+            return await instance.replyMessage(existingChat.id, action.params.message);
+          } else {
+            console.log(`📩 Nova conversa para @${action.params.user}, usando sendDirectMessage`);
+            return await instance.sendDirectMessage(action.params.user, action.params.message);
+          }
+        } catch (dbError) {
+          console.warn(`⚠️ Erro ao consultar banco de dados para @${action.params.user}, usando sendDirectMessage como fallback:`, dbError);
+          return await instance.sendDirectMessage(action.params.user, action.params.message);
+        }
 
       case 'likePost':
         if (!action.params.postId && !action.params.postUrl) {
@@ -444,7 +472,7 @@ export class WorkflowProcessor {
   /**
    * Executa um workflow completo
    */
-  async executeWorkflow(workflow: Workflow, instagramConfig?: InstagramConfig): Promise<WorkflowResult> {
+  async executeWorkflow(workflow: Workflow): Promise<WorkflowResult> {
     const startTime = new Date();
     const result: WorkflowResult = {
       workflowId: workflow.id,
@@ -464,7 +492,7 @@ export class WorkflowProcessor {
       console.log(`🚀 Iniciando execução do workflow: ${workflow.name} (${workflow.id})`);
 
       // Garantir que a instância do Instagram existe
-      const instance = await this.ensureInstagramInstance(workflow.username, instagramConfig);
+      const instance = await this.ensureInstagramInstance(workflow.username);
 
       // Verificar se a página está ativa
       if (!await instance.isPageActive()) {

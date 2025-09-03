@@ -291,12 +291,13 @@ app.post('/api/instagram/parar/:username', async (req, res) => {
 });
 
 /**
- * @route POST /api/workflow/execute
+ * @route POST /api/instagram/workflow/execute
  * @description Executa um workflow
  */
-app.post('/api/workflow/execute', async (req, res) => {
+app.post('/api/instagram/workflow/execute', async (req, res) => {
   try {
-    const { workflow, instagramConfig } = req.body;
+    const { workflow } = req.body;
+    console.log("WORKFLOW: ", workflow);
 
     if (!workflow) {
       return res.status(400).json({
@@ -331,7 +332,7 @@ app.post('/api/workflow/execute', async (req, res) => {
     }
 
     // Executar workflow de forma assíncrona
-    const workflowPromise = workflowProcessor.executeWorkflow(workflow, instagramConfig);
+    const workflowPromise = workflowProcessor.executeWorkflow(workflow);
     runningWorkflows.set(workflow.id, workflowPromise);
 
     // Remover da lista quando terminar
@@ -357,10 +358,10 @@ app.post('/api/workflow/execute', async (req, res) => {
 });
 
 /**
- * @route GET /api/workflow/status/:workflowId
+ * @route GET /api/instagram/workflow/status/:workflowId
  * @description Verifica o status de um workflow
  */
-app.get('/api/workflow/status/:workflowId', async (req, res) => {
+app.get('/api/instagram/workflow/status/:workflowId', async (req, res) => {
   const { workflowId } = req.params;
 
   try {
@@ -405,10 +406,10 @@ app.get('/api/workflow/status/:workflowId', async (req, res) => {
 });
 
 /**
- * @route POST /api/workflow/stop/:workflowId
+ * @route POST /api/instagram/workflow/stop/:workflowId
  * @description Para a execução de um workflow
  */
-app.post('/api/workflow/stop/:workflowId', async (req, res) => {
+app.post('/api/instagram/workflow/stop/:workflowId', async (req, res) => {
   const { workflowId } = req.params;
 
   try {
@@ -450,10 +451,10 @@ app.post('/api/workflow/stop/:workflowId', async (req, res) => {
 });
 
 /**
- * @route GET /api/workflow/list
+ * @route GET /api/instagram/workflow/list
  * @description Lista todos os workflows executados
  */
-app.get('/api/workflow/list', (req, res) => {
+app.get('/api/instagram/workflow/list', (req, res) => {
   try {
     const results = workflowProcessor.getAllResults();
     const runningIds = Array.from(runningWorkflows.keys());
@@ -489,10 +490,10 @@ const server = app.listen(PORT, () => {
   console.log(`   POST /api/instagram/iniciar - Inicializar instância do Instagram`);
   console.log(`   GET  /api/instagram/status/:username - Verificar status da instância`);
   console.log(`   POST /api/instagram/parar/:username - Parar instância`);
-  console.log(`   POST /api/workflow/execute - Executar workflow`);
-  console.log(`   GET  /api/workflow/status/:workflowId - Status do workflow`);
-  console.log(`   POST /api/workflow/stop/:workflowId - Parar workflow`);
-  console.log(`   GET  /api/workflow/list - Listar workflows`);
+  console.log(`   POST /api/instagram/workflow/execute - Executar workflow`);
+  console.log(`   GET  /api/instagram/workflow/status/:workflowId - Status do workflow`);
+  console.log(`   POST /api/instagram/workflow/stop/:workflowId - Parar workflow`);
+  console.log(`   GET  /api/instagram/workflow/list - Listar workflows`);
 });
 
 // Tratamento de erros e cleanup

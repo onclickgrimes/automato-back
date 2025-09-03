@@ -688,9 +688,10 @@ export class Instagram {
     }
 
     try {
+      const postIdOnly = this.extractPostId(postId);
       console.log(`💬 Comentando no post: ${postId}`);
-
-      await this.page.goto(`https://www.instagram.com/p/${postId}/`, { waitUntil: 'networkidle2' });
+      
+      await this.page.goto(`https://www.instagram.com/p/${postIdOnly}/`, { waitUntil: 'networkidle2' });
       await this.randomDelay(2000, 4000);
 
       // Procura pelo campo de comentário
@@ -1304,24 +1305,24 @@ export class Instagram {
 
     try {
       // Extrai o ID do post da URL (funciona para /p/ e /reel/)
-      const postIdMatch = postUrl.match(/\/(p|reel)\/([^/]+)\//); 
+      const postIdMatch = postUrl.match(/\/(p|reel)\/([^/]+)\//);
       if (!postIdMatch) {
         throw new Error('URL do post inválida');
       }
-      
+
       const postId = postIdMatch[2];
       const likedByUrl = `https://www.instagram.com/p/${postId}/liked_by/`;
-      
+
       console.log(`🔍 Navegando para página de curtidas: ${likedByUrl}`);
-      
+
       // Navega para a página de curtidas
       await this.page.goto(likedByUrl, {
         waitUntil: 'domcontentloaded',
         timeout: 15000,
       });
-      
+
       await this.randomDelay(2000, 3000);
-      
+
       // Aguarda o carregamento da lista de usuários
       try {
         await this.page.waitForSelector('div.x1rg5ohu:not([class*=" "]) span.xjp7ctv a', { timeout: 10000 });
@@ -1329,13 +1330,13 @@ export class Instagram {
         console.warn('⚠️ Nenhum usuário encontrado na página de curtidas');
         return [];
       }
-      
+
       // Coleta os usernames usando o seletor fornecido
       const usernamesThatLikes = await this.page.$$eval(
         'div.x1rg5ohu:not([class*=" "]) span.xjp7ctv a',
         (anchors) => anchors.map(a => a.getAttribute('href'))
       );
-      
+
       // Extrai apenas os usernames das URLs e limita a 50
       const usernames = usernamesThatLikes
         .map(href => {
@@ -1346,10 +1347,10 @@ export class Instagram {
         })
         .filter(username => username !== null && username.length > 0)
         .slice(0, 50) as string[];
-      
+
       console.log(`✅ Coletados ${usernames.length} usuários que curtiram o post`);
       return usernames;
-      
+
     } catch (error: any) {
       console.error(`❌ Erro ao coletar curtidores:`, error.message);
       return [];
@@ -1395,248 +1396,248 @@ export class Instagram {
 
     while (this.isMonitoringNewPostsFromUsers && (!maxExecutions || executionCount < maxExecutions)) {
       executionCount++;
-      
+
       // Circuit breaker: para se houver muitos erros consecutivos
       if (consecutiveErrors >= maxConsecutiveErrors) {
         console.error(`❌ Muitos erros consecutivos (${consecutiveErrors}). Parando monitoramento.`);
         this.isMonitoringNewPostsFromUsers = false;
         break;
       }
-      
+
       try {
         const allNewPosts: PostData[] = [];
 
         for (const username of usernames) {
           if (!this.isMonitoringNewPostsFromUsers) break;
 
-        // Função auxiliar para extrair 6 links de posts/reels de uma aba com retry
-        const extractLinks = async (path: string, user: string, retries: number = 3) => {
-          if (!this.page) throw new Error('Page not initialized');
-          
-          for (let attempt = 1; attempt <= retries; attempt++) {
-            try {
-              console.log(`🔄 Tentativa ${attempt}/${retries} para @${user}${path}`);
-              
-              await this.page.goto(`https://www.instagram.com/${user}${path}`, {
-                waitUntil: 'domcontentloaded',
-                timeout: 15000,
-              });
-              
-              // Aguarda um pouco para o conteúdo carregar
-              await this.randomDelay(2000, 3000);
-              
-              // Tenta aguardar por links, mas não falha se não encontrar
+          // Função auxiliar para extrair 6 links de posts/reels de uma aba com retry
+          const extractLinks = async (path: string, user: string, retries: number = 3) => {
+            if (!this.page) throw new Error('Page not initialized');
+
+            for (let attempt = 1; attempt <= retries; attempt++) {
               try {
-                await this.page.waitForSelector('a[href]', { timeout: 5000 });
-              } catch {
-                console.warn(`⚠️ Nenhum link encontrado para @${user}${path}`);
-                return [];
-              }
-              
-              await this.randomDelay(1000, 2000);
+                console.log(`🔄 Tentativa ${attempt}/${retries} para @${user}${path}`);
 
-              const links = await this.page.evaluate((u, limit) => {
-                const anchors = Array.from(document.querySelectorAll('a[href]'));
-                const links = anchors
-                  .map((a) => (a as HTMLAnchorElement).href)
-                  .filter((href) => href.includes('/p/') || href.includes('/reel/'))
-                  .slice(0, limit);
-
-                return links.map((url) => {
-                  const postId =
-                    url.includes('/p/')
-                      ? url.split('/p/')[1]?.split('/')[0]
-                      : url.split('/reel/')[1]?.split('/')[0];
-
-                  return {
-                    url,
-                    id: postId || '',
-                    timeAgo: 'Desconhecido',
-                    likes: 0,
-                    comments: 0,
-                    username: u,
-                    postDate: null,
-                  };
+                await this.page.goto(`https://www.instagram.com/${user}${path}`, {
+                  waitUntil: 'domcontentloaded',
+                  timeout: 15000,
                 });
-              }, user, maxPostsPerUser);
-              
-              console.log(`✅ Encontrados ${links.length} posts/reels para @${user}${path}`);
-              return links;
-              
-            } catch (error: any) {
-              console.warn(`⚠️ Tentativa ${attempt}/${retries} falhou para @${user}${path}:`, error.message);
-              
-              if (attempt === retries) {
-                console.error(`❌ Todas as tentativas falharam para @${user}${path}`);
-                return [];
-              }
-              
-              // Aguarda antes da próxima tentativa
-              await this.randomDelay(2000, 4000);
-            }
-          }
-          
-          return [];
-        };
 
-        try {
-          // Executa sequencialmente para evitar conflitos de navegação na mesma página
-          console.log(`🔍 Coletando posts principais de @${username}...`);
-          const postsMain = await extractLinks('/', username);
-          
-          console.log(`🎬 Coletando reels de @${username}...`);
-          const postsReels = await extractLinks('/reels/', username);
+                // Aguarda um pouco para o conteúdo carregar
+                await this.randomDelay(2000, 3000);
 
-          // junta e remove duplicados
-          const merged = [...postsMain, ...postsReels].filter(
-            (p, idx, arr) => arr.findIndex((pp) => pp.id === p.id) === idx
-          );
-
-          for (const post of merged) {
-            if (!this.isMonitoringNewPostsFromUsers) break;
-            if (!post.id || seenPosts.has(post.id)) continue;
-
-            // Processa post individual com retry
-            const processPost = async (postData: any, retries: number = 2) => {
-              for (let attempt = 1; attempt <= retries; attempt++) {
+                // Tenta aguardar por links, mas não falha se não encontrar
                 try {
-                  console.log(`🔍 Processando post ${postData.id} (tentativa ${attempt}/${retries})`);
-                  
-                  await this.page!.goto(postData.url, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 12000,
+                  await this.page.waitForSelector('a[href]', { timeout: 5000 });
+                } catch {
+                  console.warn(`⚠️ Nenhum link encontrado para @${user}${path}`);
+                  return [];
+                }
+
+                await this.randomDelay(1000, 2000);
+
+                const links = await this.page.evaluate((u, limit) => {
+                  const anchors = Array.from(document.querySelectorAll('a[href]'));
+                  const links = anchors
+                    .map((a) => (a as HTMLAnchorElement).href)
+                    .filter((href) => href.includes('/p/') || href.includes('/reel/'))
+                    .slice(0, limit);
+
+                  return links.map((url) => {
+                    const postId =
+                      url.includes('/p/')
+                        ? url.split('/p/')[1]?.split('/')[0]
+                        : url.split('/reel/')[1]?.split('/')[0];
+
+                    return {
+                      url,
+                      id: postId || '',
+                      timeAgo: 'Desconhecido',
+                      likes: 0,
+                      comments: 0,
+                      username: u,
+                      postDate: null,
+                    };
                   });
-                  
-                  await this.randomDelay(1000, 2000);
+                }, user, maxPostsPerUser);
 
-                  // Pega stats com timeout usando seletores mais específicos
-                  const stats = await Promise.race([
-                    this.page!.evaluate(() => {
-                      let likes = 0;
-                      let comments = 0;
+                console.log(`✅ Encontrados ${links.length} posts/reels para @${user}${path}`);
+                return links;
 
-                      // Busca curtidas pelo href específico '/liked_by/'
-                      const likeLink = document.querySelector('a[href*="/liked_by/"]');
-                      if (likeLink) {
-                        const likeText = likeLink.textContent || '';
-                        const likeMatch = likeText.match(/([\d,.]+)/);
-                        if (likeMatch) {
-                          likes = parseInt(likeMatch[1].replace(/[,.]/g, '')) || 0;
+              } catch (error: any) {
+                console.warn(`⚠️ Tentativa ${attempt}/${retries} falhou para @${user}${path}:`, error.message);
+
+                if (attempt === retries) {
+                  console.error(`❌ Todas as tentativas falharam para @${user}${path}`);
+                  return [];
+                }
+
+                // Aguarda antes da próxima tentativa
+                await this.randomDelay(2000, 4000);
+              }
+            }
+
+            return [];
+          };
+
+          try {
+            // Executa sequencialmente para evitar conflitos de navegação na mesma página
+            console.log(`🔍 Coletando posts principais de @${username}...`);
+            const postsMain = await extractLinks('/', username);
+
+            console.log(`🎬 Coletando reels de @${username}...`);
+            const postsReels = await extractLinks('/reels/', username);
+
+            // junta e remove duplicados
+            const merged = [...postsMain, ...postsReels].filter(
+              (p, idx, arr) => arr.findIndex((pp) => pp.id === p.id) === idx
+            );
+
+            for (const post of merged) {
+              if (!this.isMonitoringNewPostsFromUsers) break;
+              if (!post.id || seenPosts.has(post.id)) continue;
+
+              // Processa post individual com retry
+              const processPost = async (postData: any, retries: number = 2) => {
+                for (let attempt = 1; attempt <= retries; attempt++) {
+                  try {
+                    console.log(`🔍 Processando post ${postData.id} (tentativa ${attempt}/${retries})`);
+
+                    await this.page!.goto(postData.url, {
+                      waitUntil: 'domcontentloaded',
+                      timeout: 12000,
+                    });
+
+                    await this.randomDelay(1000, 2000);
+
+                    // Pega stats com timeout usando seletores mais específicos
+                    const stats = await Promise.race([
+                      this.page!.evaluate(() => {
+                        let likes = 0;
+                        let comments = 0;
+
+                        // Busca curtidas pelo href específico '/liked_by/'
+                        const likeLink = document.querySelector('a[href*="/liked_by/"]');
+                        if (likeLink) {
+                          const likeText = likeLink.textContent || '';
+                          const likeMatch = likeText.match(/([\d,.]+)/);
+                          if (likeMatch) {
+                            likes = parseInt(likeMatch[1].replace(/[,.]/g, '')) || 0;
+                          }
                         }
-                      }
 
-                      // Fallback: busca por texto genérico se não encontrar o link específico
-                      if (likes === 0) {
+                        // Fallback: busca por texto genérico se não encontrar o link específico
+                        if (likes === 0) {
+                          const texts = Array.from(document.querySelectorAll('span, a')).map(
+                            (el) => el.textContent || ''
+                          );
+
+                          for (const t of texts) {
+                            if (/curtida|like/i.test(t)) {
+                              const m = t.match(/([\d,.]+)/);
+                              if (m) {
+                                likes = parseInt(m[1].replace(/[,.]/g, '')) || 0;
+                                break;
+                              }
+                            }
+                          }
+                        }
+
+                        // Busca comentários
                         const texts = Array.from(document.querySelectorAll('span, a')).map(
                           (el) => el.textContent || ''
                         );
 
                         for (const t of texts) {
-                          if (/curtida|like/i.test(t)) {
+                          if (/comentário|comment/i.test(t)) {
                             const m = t.match(/([\d,.]+)/);
                             if (m) {
-                              likes = parseInt(m[1].replace(/[,.]/g, '')) || 0;
+                              comments = parseInt(m[1].replace(/[,.]/g, '')) || 0;
                               break;
                             }
                           }
                         }
-                      }
 
-                      // Busca comentários
-                      const texts = Array.from(document.querySelectorAll('span, a')).map(
-                        (el) => el.textContent || ''
-                      );
-
-                      for (const t of texts) {
-                        if (/comentário|comment/i.test(t)) {
-                          const m = t.match(/([\d,.]+)/);
-                          if (m) {
-                            comments = parseInt(m[1].replace(/[,.]/g, '')) || 0;
-                            break;
+                        // Busca data da postagem
+                        let postDate = null;
+                        const timeElement = document.querySelector('time[datetime]');
+                        if (timeElement) {
+                          const datetime = timeElement.getAttribute('datetime');
+                          if (datetime) {
+                            postDate = new Date(datetime).toISOString();
                           }
                         }
+
+                        return { likes, comments, postDate };
+                      }),
+                      new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('Timeout ao extrair stats')), 8000)
+                      )
+                    ]) as { likes: number; comments: number; postDate: string | null };
+
+                    postData.likes = stats.likes;
+                    postData.comments = stats.comments;
+                    postData.postDate = stats.postDate;
+
+                    // Coleta usuários que curtiram o post
+                    try {
+                      const likedByUsers = await this.getLikedByUsers(postData.url);
+                      postData.likedByUsers = likedByUsers;
+                      postData.followedLikers = false; // Inicialmente não seguiu os curtidores
+
+                      if (likedByUsers.length > 0) {
+                        console.log(`👥 Coletados ${likedByUsers.length} usuários que curtiram o post`);
                       }
-
-                      // Busca data da postagem
-                      let postDate = null;
-                      const timeElement = document.querySelector('time[datetime]');
-                      if (timeElement) {
-                        const datetime = timeElement.getAttribute('datetime');
-                        if (datetime) {
-                          postDate = new Date(datetime).toISOString();
-                        }
-                      }
-
-                      return { likes, comments, postDate };
-                    }),
-                    new Promise((_, reject) => 
-                      setTimeout(() => reject(new Error('Timeout ao extrair stats')), 8000)
-                    )
-                  ]) as { likes: number; comments: number; postDate: string | null };
-
-                  postData.likes = stats.likes;
-                  postData.comments = stats.comments;
-                  postData.postDate = stats.postDate;
-
-                  // Coleta usuários que curtiram o post
-                  try {
-                    const likedByUsers = await this.getLikedByUsers(postData.url);
-                    postData.likedByUsers = likedByUsers;
-                    postData.followedLikers = false; // Inicialmente não seguiu os curtidores
-                    
-                    if (likedByUsers.length > 0) {
-                      console.log(`👥 Coletados ${likedByUsers.length} usuários que curtiram o post`);
+                    } catch (likeError: any) {
+                      console.warn(`⚠️ Erro ao coletar curtidores do post ${postData.url}:`, likeError.message);
+                      postData.likedByUsers = [];
+                      postData.followedLikers = false;
                     }
-                  } catch (likeError: any) {
-                    console.warn(`⚠️ Erro ao coletar curtidores do post ${postData.url}:`, likeError.message);
-                    postData.likedByUsers = [];
-                    postData.followedLikers = false;
-                  }
 
-                  seenPosts.add(postData.id);
-                  allNewPosts.push(postData);
-                  allCollectedPosts.push(postData);
+                    seenPosts.add(postData.id);
+                    allNewPosts.push(postData);
+                    allCollectedPosts.push(postData);
 
-                  const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
-                  console.log(
-                    `📊 Post/Reel de @${username}: ${postData.likes} curtidas, ${postData.comments} comentários${dateInfo}`
-                  );
-                  
-                  return true; // Sucesso
-                  
-                } catch (err: any) {
-                  console.warn(`⚠️ Tentativa ${attempt}/${retries} falhou para ${postData.url}:`, err.message);
-                  
-                  if (attempt === retries) {
-                    console.error(`❌ Falha definitiva ao processar ${postData.url}`);
-                    return false;
+                    const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
+                    console.log(
+                      `📊 Post/Reel de @${username}: ${postData.likes} curtidas, ${postData.comments} comentários${dateInfo}`
+                    );
+
+                    return true; // Sucesso
+
+                  } catch (err: any) {
+                    console.warn(`⚠️ Tentativa ${attempt}/${retries} falhou para ${postData.url}:`, err.message);
+
+                    if (attempt === retries) {
+                      console.error(`❌ Falha definitiva ao processar ${postData.url}`);
+                      return false;
+                    }
+
+                    await this.randomDelay(1500, 3000);
                   }
-                  
-                  await this.randomDelay(1500, 3000);
                 }
+                return false;
+              };
+
+              await processPost(post);
+            }
+          } catch (err: any) {
+            console.error(`⚠️ Erro ao coletar posts/reels de @${username}:`, err.message);
+
+            // Se for erro de navegação, tenta reinicializar a página
+            if (err.message.includes('ERR_ABORTED') || err.message.includes('Navigation')) {
+              console.log(`🔄 Tentando reinicializar página após erro de navegação...`);
+              try {
+                await this.page!.goto('https://www.instagram.com/', {
+                  waitUntil: 'domcontentloaded',
+                  timeout: 10000
+                });
+                await this.randomDelay(2000, 4000);
+              } catch (reinitErr: any) {
+                console.error(`❌ Falha ao reinicializar página:`, reinitErr.message);
               }
-              return false;
-            };
-            
-            await processPost(post);
-          }
-        } catch (err: any) {
-          console.error(`⚠️ Erro ao coletar posts/reels de @${username}:`, err.message);
-          
-          // Se for erro de navegação, tenta reinicializar a página
-          if (err.message.includes('ERR_ABORTED') || err.message.includes('Navigation')) {
-            console.log(`🔄 Tentando reinicializar página após erro de navegação...`);
-            try {
-              await this.page!.goto('https://www.instagram.com/', {
-                waitUntil: 'domcontentloaded',
-                timeout: 10000
-              });
-              await this.randomDelay(2000, 4000);
-            } catch (reinitErr: any) {
-              console.error(`❌ Falha ao reinicializar página:`, reinitErr.message);
             }
           }
-        }
           await this.randomDelay(3000, 5000); // Delay entre usuários
         }
 
@@ -1650,14 +1651,14 @@ export class Instagram {
 
         console.log(`✅ Verificação ${executionCount}${maxExecutions ? `/${maxExecutions}` : ''} completa. ${allNewPosts.length} novos posts encontrados.`);
         console.log(`⏱️ Tempo total decorrido: ${Math.round(totalTime / 1000)}s`);
-        
+
         // Reset contador de erros em caso de sucesso
         consecutiveErrors = 0;
 
       } catch (error: any) {
         consecutiveErrors++;
         console.error(`❌ Erro no monitoramento de posts (${consecutiveErrors}/${maxConsecutiveErrors}):`, error.message);
-        
+
         // Em caso de erro crítico, aguarda mais tempo antes da próxima tentativa
         if (consecutiveErrors >= 2) {
           console.log(`⏳ Aguardando tempo extra devido a erros consecutivos...`);
@@ -1668,7 +1669,7 @@ export class Instagram {
       // Aguarda próxima verificação
       await this.randomDelay(checkInterval, checkInterval + 5000);
     }
-    
+
     return allCollectedPosts;
   }
 
@@ -1777,4 +1778,28 @@ export class Instagram {
       return false;
     }
   }
+
+  private extractPostId(input: string): string {
+    try {
+      // Se for uma URL completa (com ou sem protocolo)
+      if (input.includes("instagram.com")) {
+        // Garante que tenha protocolo
+        const url = input.startsWith("http") ? input : `https://${input}`;
+        const parsed = new URL(url);
+
+        // URL padrão do Instagram: /p/:id/
+        const parts = parsed.pathname.split("/").filter(Boolean);
+        if (parts[0] === "p" && parts[1]) {
+          return parts[1];
+        }
+      }
+
+      // Caso contrário, assumimos que já é só o postId
+      return input.trim();
+    } catch {
+      return input.trim(); // fallback se der erro no parse
+    }
+  }
+
+
 }
