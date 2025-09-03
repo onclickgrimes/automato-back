@@ -27,6 +27,8 @@ export interface PostData {
   url: string;
   username: string;
   likes: number;
+  post_id: string;
+  post_date: any;
   comments: number;
   postDate?: string;
   likedByUsers?: string[];

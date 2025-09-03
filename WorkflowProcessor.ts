@@ -1,4 +1,4 @@
-import { Instagram, InstagramConfig } from './src';
+import { Instagram, InstagramConfig, PostData } from './src';
 import { PostsDatabase } from './src/PostsDatabase';
 import knex from 'knex';
 import axios from 'axios';
@@ -97,7 +97,7 @@ export class WorkflowProcessor {
 
       const ig = new Instagram(config);
       await ig.init();
-      
+
       if (!ig.loggedIn) {
         throw new Error(`Falha na autenticação para ${username}`);
       }
@@ -107,7 +107,7 @@ export class WorkflowProcessor {
         throw new Error(`Navegador não está conectado para ${username}`);
       }
 
-      if(!ig.isPageActive()){
+      if (!ig.isPageActive()) {
         throw new Error(`Página não está ativa para ${username}`);
       }
 
@@ -124,7 +124,7 @@ export class WorkflowProcessor {
    */
   private async executeAction(action: WorkflowAction, instance: Instagram, username: string): Promise<any> {
     console.log(`🔄 Executando ação: ${action.type}`);
-    
+
     switch (action.type) {
       case 'sendDirectMessage':
         if (!action.params.user || !action.params.message) {
@@ -174,7 +174,7 @@ export class WorkflowProcessor {
         }
         const postOptions = {
           checkInterval: action.params.checkInterval || 10000,
-          maxPostsPerUser: action.params.maxPostsPerUser || 6,  
+          maxPostsPerUser: action.params.maxPostsPerUser || 6,
           maxExecutions: action.params.maxExecutions || 1000,
           onNewPosts: action.params.onNewPost || (async (posts: any[]) => {
             console.log(`📝 ${posts.length} novos posts detectados`);
@@ -182,7 +182,7 @@ export class WorkflowProcessor {
               try {
                 const resultado = await PostsDatabase.savePosts(posts, username);
                 console.log(`💾 Salvamento: ${resultado.saved} novos, ${resultado.duplicates} atualizados`);
-                
+
                 // Enviar dados para o Supabase via frontend
                 if (resultado.saved > 0 || resultado.duplicates > 0) {
                   await this.syncPostsToSupabase(posts, username);
@@ -197,13 +197,13 @@ export class WorkflowProcessor {
           usernames: [action.params.username],
           ...postOptions
         });
-        
+
         // Salva todos os posts coletados no final
         if (collectedPosts.length > 0) {
           try {
             const resultadoFinal = await PostsDatabase.savePosts(collectedPosts, username);
             console.log(`💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
-            
+
             // Enviar dados para o Supabase via frontend
             if (resultadoFinal.saved > 0 || resultadoFinal.duplicates > 0) {
               await this.syncPostsToSupabase(collectedPosts, username);
@@ -212,11 +212,11 @@ export class WorkflowProcessor {
             console.error('❌ Erro ao salvar posts coletados no banco:', error.message);
           }
         }
-        
-        return { 
-          success: true, 
+
+        return {
+          success: true,
           postsCollected: collectedPosts.length,
-          posts: collectedPosts 
+          posts: collectedPosts
         };
 
       case 'delay':
@@ -237,7 +237,7 @@ export class WorkflowProcessor {
    */
   private async executeStep(step: WorkflowStep, instance: Instagram, username: string, previousResults: { [stepId: string]: any }): Promise<any> {
     console.log(`📋 Executando step: ${step.name} (${step.id})`);
-    
+
     // Verifica condições
     if (step.condition) {
       const shouldExecute = this.evaluateCondition(step.condition, previousResults);
@@ -279,7 +279,7 @@ export class WorkflowProcessor {
 
       } catch (error) {
         console.error(`❌ Erro na tentativa ${attempts} do step ${step.id}:`, error);
-        
+
         if (attempts >= maxAttempts) {
           return {
             stepId: step.id,
@@ -345,7 +345,7 @@ export class WorkflowProcessor {
 
     try {
       console.log(`🚀 Iniciando execução do workflow: ${workflow.name} (${workflow.id})`);
-      
+
       // Garantir que a instância do Instagram existe
       const instance = await this.ensureInstagramInstance(workflow.username, instagramConfig);
 
@@ -353,7 +353,7 @@ export class WorkflowProcessor {
       if (!await instance.isPageActive()) {
         throw new Error(`Página do usuário ${workflow.username} não está ativa`);
       }
-      
+
       // Configurar timeout global se especificado
       let timeoutHandle: NodeJS.Timeout | null = null;
       if (workflow.config?.timeout) {
@@ -366,16 +366,16 @@ export class WorkflowProcessor {
       for (const step of workflow.steps) {
         try {
           const stepResult = await this.executeStep(step, instance, workflow.username, result.results);
-          
+
           result.results[step.id] = stepResult;
-          
+
           if (stepResult.success) {
             result.executedSteps.push(step.id);
             console.log(`✅ Step ${step.id} executado com sucesso`);
           } else if (!stepResult.skipped) {
             result.failedSteps.push(step.id);
             console.error(`❌ Step ${step.id} falhou`);
-            
+
             // Parar execução se configurado para parar em erro
             if (workflow.config?.stopOnError !== false) {
               console.log(`🛑 Parando execução devido a erro no step ${step.id}`);
@@ -390,9 +390,9 @@ export class WorkflowProcessor {
             success: false,
             error: error instanceof Error ? error.message : 'Erro desconhecido'
           };
-          
+
           console.error(`❌ Erro crítico no step ${step.id}:`, error);
-          
+
           if (workflow.config?.stopOnError !== false) {
             break;
           }
@@ -406,7 +406,7 @@ export class WorkflowProcessor {
 
       // Determinar sucesso geral
       result.success = result.failedSteps.length === 0 && result.executedSteps.length > 0;
-      
+
     } catch (error) {
       result.error = error instanceof Error ? error.message : 'Erro desconhecido';
       console.error(`❌ Erro na execução do workflow ${workflow.id}:`, error);
@@ -414,16 +414,16 @@ export class WorkflowProcessor {
 
     result.endTime = new Date();
     result.executionTime = result.endTime.getTime() - result.startTime.getTime();
-    
+
     // Armazenar resultado
     this.results.set(workflow.id, result);
-    
+
     console.log(`🏁 Workflow ${workflow.id} finalizado:`);
     console.log(`   - Sucesso: ${result.success}`);
     console.log(`   - Steps executados: ${result.executedSteps.length}`);
     console.log(`   - Steps falharam: ${result.failedSteps.length}`);
     console.log(`   - Tempo de execução: ${result.executionTime}ms`);
-    
+
     return result;
   }
 
@@ -456,12 +456,12 @@ export class WorkflowProcessor {
     if (!result) {
       return false;
     }
-    
+
     // Marcar como parado (implementação básica)
     result.error = 'Workflow interrompido pelo usuário';
     result.endTime = new Date();
     result.executionTime = result.endTime.getTime() - result.startTime.getTime();
-    
+
     console.log(`🛑 Workflow ${workflowId} foi interrompido`);
     return true;
   }
@@ -469,25 +469,27 @@ export class WorkflowProcessor {
   /**
    * Sincroniza posts salvos no SQLite com o Supabase via frontend
    */
-  private async syncPostsToSupabase(posts: any[], username: string): Promise<void> {
+  private async syncPostsToSupabase(posts: PostData[], username: string): Promise<void> {
     try {
       console.log(`🔄 Sincronizando ${posts.length} posts com Supabase para ${username}...`);
-      
+
       const payload = {
         user_id: "dc780220-2c99-4bfb-9302-c1e983c40152",
         username: username,
-        posts: posts.map(post => ({
-          url: post.url,
-          post_id: post.post_id || post.url.match(/\/(p|reel)\/([^/]+)\//)?.[2] || post.url,
-          username: post.username,
-          likes: post.likes || 0,
-          comments: post.comments || 0,
-          post_date: post.post_date || post.date,
-          liked_by_users: Array.isArray(post.liked_by_users) ? post.liked_by_users : JSON.parse(post.liked_by_users || "[]"),
-          followed_likers: post.followedLikers || false
-        }))
+        posts: posts.map(post => {
+          return {
+            url: post.url,
+            post_id: post.post_id || post.url.match(/\/(p|reel)\/([^/]+)\//)?.[2] || post.url,
+            username: post.username,
+            likes: post.likes || 0,
+            comments: post.comments || 0,
+            post_date: post.postDate || post.post_date,
+            liked_by_users: post.likedByUsers || [], // Esta linha está funcionalmente correta
+            followed_likers: post.followedLikers || false
+          };
+        })
       };
-      console.log(`📝 Payload para sincronização:`, payload);
+      // console.log(`📝 Payload para sincronização (completo):`, JSON.stringify(payload, null, 2));
       const response = await axios.post(this.supabaseEndpoint, payload, {
         headers: {
           'Content-Type': 'application/json',
@@ -495,14 +497,14 @@ export class WorkflowProcessor {
         },
         timeout: 30000 // 30 segundos de timeout
       });
-      
+
       if (response.status === 200 || response.status === 201) {
         console.log(`✅ Posts sincronizados com Supabase: ${posts.length} posts enviados`);
         console.log(`📊 Resposta do Supabase:`, response.data);
       } else {
         console.warn(`⚠️ Resposta inesperada do Supabase: ${response.status}`);
       }
-      
+
     } catch (error: any) {
       console.error('❌ Erro ao sincronizar posts com Supabase:', {
         message: error.message,
@@ -510,7 +512,7 @@ export class WorkflowProcessor {
         postsCount: posts.length,
         username: username
       });
-      
+
       // Log detalhado do erro para debug
       if (error.response) {
         console.error('📋 Detalhes da resposta de erro:', {
@@ -539,7 +541,7 @@ export class WorkflowProcessor {
  */
 export function validateWorkflow(workflow: Workflow): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
-  
+
   if (!workflow.id || !workflow.name || !workflow.username || !workflow.steps) {
     errors.push('Workflow inválido: campos obrigatórios (id, name, username, steps) estão faltando');
   }
