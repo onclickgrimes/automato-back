@@ -1361,6 +1361,7 @@ export class Instagram {
     usernames: string[];
     checkInterval?: number;
     maxExecutions?: number;
+    maxPostsPerUser?: number;
     onNewPosts?: (posts: PostData[], executionCount: number, totalTime: number) => void;
   }): Promise<PostData[]> {
     if (!this.isLoggedIn || !this.page) {
@@ -1371,13 +1372,16 @@ export class Instagram {
     this.isMonitoringNewMessages = false;
     this.isMonitoringNewPostsFromUsers = true;
 
-    const { usernames, checkInterval = 60000, maxExecutions, onNewPosts } = options;
+    const { usernames, checkInterval = 60000, maxExecutions, maxPostsPerUser = 6, onNewPosts } = options;
 
     console.log('📸 Iniciando monitoramento de posts de usuários...');
     console.log(`👥 Usuários monitorados: ${usernames.join(', ')}`);
     console.log(`⏱️ Intervalo de verificação: ${checkInterval / 1000}s`);
     if (maxExecutions) {
       console.log(`🔄 Máximo de execuções: ${maxExecutions}`);
+    }
+    if (maxPostsPerUser) {
+      console.log(`🔄 Máximo de posts por usuário: ${maxPostsPerUser}`);
     }
 
     const seenPosts = new Set<string>();
@@ -1429,12 +1433,12 @@ export class Instagram {
               
               await this.randomDelay(1000, 2000);
 
-              const links = await this.page.evaluate((u) => {
+              const links = await this.page.evaluate((u, limit) => {
                 const anchors = Array.from(document.querySelectorAll('a[href]'));
                 const links = anchors
                   .map((a) => (a as HTMLAnchorElement).href)
                   .filter((href) => href.includes('/p/') || href.includes('/reel/'))
-                  .slice(0, 6);
+                  .slice(0, limit);
 
                 return links.map((url) => {
                   const postId =
@@ -1452,7 +1456,7 @@ export class Instagram {
                     postDate: null,
                   };
                 });
-              }, user);
+              }, user, maxPostsPerUser);
               
               console.log(`✅ Encontrados ${links.length} posts/reels para @${user}${path}`);
               return links;

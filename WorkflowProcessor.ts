@@ -1,6 +1,7 @@
 import { Instagram, InstagramConfig } from './src';
 import { PostsDatabase } from './src/PostsDatabase';
 import knex from 'knex';
+import axios from 'axios';
 
 // Interfaces para Workflow
 export interface WorkflowAction {
@@ -15,6 +16,8 @@ export interface WorkflowAction {
     duration?: number; // em milissegundos
     includeRequests?: boolean;
     checkInterval?: number;
+    maxExecutions?: number;
+    maxPostsPerUser?: number;
     onNewMessage?: (data: any) => void;
     onNewPost?: (data: any) => void;
   };
@@ -66,15 +69,21 @@ export class WorkflowProcessor {
   private activeInstances: Map<string, Instagram>;
   private initializeDatabaseForUser: (username: string) => Promise<void>;
   private saveMessageToDatabase: (username: string, messageData: any) => Promise<void>;
+  private supabaseEndpoint: string;
+  private frontendEndpoint: string;
 
   constructor(
     activeInstances: Map<string, Instagram>,
     initializeDatabaseForUser: (username: string) => Promise<void>,
-    saveMessageToDatabase: (username: string, messageData: any) => Promise<void>
+    saveMessageToDatabase: (username: string, messageData: any) => Promise<void>,
+    frontendEndpoint: string = 'http://localhost:3000',
+    supabaseRoute: string = '/api/instagram-accounts/posts'
   ) {
     this.activeInstances = activeInstances;
     this.initializeDatabaseForUser = initializeDatabaseForUser;
     this.saveMessageToDatabase = saveMessageToDatabase;
+    this.frontendEndpoint = frontendEndpoint;
+    this.supabaseEndpoint = `${frontendEndpoint}${supabaseRoute}`;
   }
 
   /**
@@ -165,12 +174,19 @@ export class WorkflowProcessor {
         }
         const postOptions = {
           checkInterval: action.params.checkInterval || 10000,
+          maxPostsPerUser: action.params.maxPostsPerUser || 6,  
+          maxExecutions: action.params.maxExecutions || 1000,
           onNewPosts: action.params.onNewPost || (async (posts: any[]) => {
             console.log(`📝 ${posts.length} novos posts detectados`);
             if (posts.length > 0) {
               try {
                 const resultado = await PostsDatabase.savePosts(posts, username);
                 console.log(`💾 Salvamento: ${resultado.saved} novos, ${resultado.duplicates} atualizados`);
+                
+                // Enviar dados para o Supabase via frontend
+                if (resultado.saved > 0 || resultado.duplicates > 0) {
+                  await this.syncPostsToSupabase(posts, username);
+                }
               } catch (error: any) {
                 console.error('❌ Erro ao salvar posts no banco:', error.message);
               }
@@ -187,6 +203,11 @@ export class WorkflowProcessor {
           try {
             const resultadoFinal = await PostsDatabase.savePosts(collectedPosts, username);
             console.log(`💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
+            
+            // Enviar dados para o Supabase via frontend
+            if (resultadoFinal.saved > 0 || resultadoFinal.duplicates > 0) {
+              await this.syncPostsToSupabase(collectedPosts, username);
+            }
           } catch (error: any) {
             console.error('❌ Erro ao salvar posts coletados no banco:', error.message);
           }
@@ -443,6 +464,73 @@ export class WorkflowProcessor {
     
     console.log(`🛑 Workflow ${workflowId} foi interrompido`);
     return true;
+  }
+
+  /**
+   * Sincroniza posts salvos no SQLite com o Supabase via frontend
+   */
+  private async syncPostsToSupabase(posts: any[], username: string): Promise<void> {
+    try {
+      console.log(`🔄 Sincronizando ${posts.length} posts com Supabase para ${username}...`);
+      
+      const payload = {
+        user_id: "dc780220-2c99-4bfb-9302-c1e983c40152",
+        username: username,
+        posts: posts.map(post => ({
+          url: post.url,
+          post_id: post.post_id || post.url.match(/\/(p|reel)\/([^/]+)\//)?.[2] || post.url,
+          username: post.username,
+          likes: post.likes || 0,
+          comments: post.comments || 0,
+          post_date: post.post_date || post.date,
+          liked_by_users: Array.isArray(post.liked_by_users) ? post.liked_by_users : JSON.parse(post.liked_by_users || "[]"),
+          followed_likers: post.followedLikers || false
+        }))
+      };
+      console.log(`📝 Payload para sincronização:`, payload);
+      const response = await axios.post(this.supabaseEndpoint, payload, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': 'your_secure_api_key_here_change_this'
+        },
+        timeout: 30000 // 30 segundos de timeout
+      });
+      
+      if (response.status === 200 || response.status === 201) {
+        console.log(`✅ Posts sincronizados com Supabase: ${posts.length} posts enviados`);
+        console.log(`📊 Resposta do Supabase:`, response.data);
+      } else {
+        console.warn(`⚠️ Resposta inesperada do Supabase: ${response.status}`);
+      }
+      
+    } catch (error: any) {
+      console.error('❌ Erro ao sincronizar posts com Supabase:', {
+        message: error.message,
+        endpoint: this.supabaseEndpoint,
+        postsCount: posts.length,
+        username: username
+      });
+      
+      // Log detalhado do erro para debug
+      if (error.response) {
+        console.error('📋 Detalhes da resposta de erro:', {
+          status: error.response.status,
+          statusText: error.response.statusText,
+          data: error.response.data
+        });
+      } else if (error.request) {
+        console.error('📋 Erro de rede - sem resposta do servidor');
+      }
+    }
+  }
+
+  /**
+   * Configura o endpoint do Supabase
+   */
+  setSupabaseEndpoint(frontendEndpoint: string, supabaseRoute: string = '/api/posts/sync'): void {
+    this.frontendEndpoint = frontendEndpoint;
+    this.supabaseEndpoint = `${frontendEndpoint}${supabaseRoute}`;
+    console.log(`🔧 Endpoint do Supabase configurado: ${this.supabaseEndpoint}`);
   }
 }
 

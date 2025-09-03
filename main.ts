@@ -70,7 +70,9 @@ function loadCookies(username: string): string | null {
 const workflowProcessor = new WorkflowProcessor(
   activeInstances,
   initializeDatabaseForUser,
-  saveMessageToDatabase
+  saveMessageToDatabase,
+  'http://localhost:3000', // Frontend endpoint
+  '/api/instagram-accounts/posts' // Supabase route
 );
 
 // Mapa para armazenar workflows em execução
