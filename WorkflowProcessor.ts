@@ -1,11 +1,13 @@
 import { Instagram, InstagramConfig, PostData } from './src';
 import { PostsDatabase } from './src/PostsDatabase';
+import { MessageProcessor } from './src/MessageProcessor';
+import { AIService } from './src/AIService';
 import knex from 'knex';
 import axios from 'axios';
 
 // Interfaces para Workflow
 export interface WorkflowAction {
-  type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay';
+  type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay' | 'startMessageProcessor' | 'stopMessageProcessor';
   params: {
     user?: string;
     message?: string;
@@ -20,6 +22,19 @@ export interface WorkflowAction {
     maxPostsPerUser?: number;
     onNewMessage?: (data: any) => void;
     onNewPost?: (data: any) => void;
+    // Parâmetros para MessageProcessor
+    aiConfig?: {
+      openaiApiKey?: string;
+      googleApiKey?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
+    processingConfig?: {
+      checkInterval?: number;
+      maxMessagesPerBatch?: number;
+      delayBetweenReplies?: { min: number; max: number };
+      enableHumanization?: boolean;
+    };
   };
   description?: string;
 }
@@ -67,6 +82,7 @@ export interface WorkflowResult {
 export class WorkflowProcessor {
   private results: Map<string, WorkflowResult> = new Map();
   private activeInstances: Map<string, Instagram>;
+  private activeMessageProcessors: Map<string, MessageProcessor> = new Map();
   private initializeDatabaseForUser: (username: string) => Promise<void>;
   private saveMessageToDatabase: (username: string, messageData: any) => Promise<void>;
   private supabaseEndpoint: string;
@@ -166,6 +182,7 @@ export class WorkflowProcessor {
             this.saveMessageToDatabase(username, data);
           })
         };
+        instance.switchMessagesMonitoring(true);
         return await instance.monitorNewMessages(messageOptions);
 
       case 'monitorPosts':
@@ -226,6 +243,103 @@ export class WorkflowProcessor {
         console.log(`⏳ Aguardando ${action.params.duration}ms...`);
         await new Promise(resolve => setTimeout(resolve, action.params.duration));
         return { success: true, duration: action.params.duration };
+
+      case 'startMessageProcessor':
+        // Configurações padrão para IA
+        const aiConfig = {
+          openaiApiKey: action.params.aiConfig?.openaiApiKey || process.env.OPENAI_API_KEY,
+          googleApiKey: action.params.aiConfig?.googleApiKey || process.env.GOOGLE_API_KEY,
+          temperature: action.params.aiConfig?.temperature || 0.7,
+          maxTokens: action.params.aiConfig?.maxTokens || 150
+        };
+
+        // Configurações padrão para processamento
+        const processingConfig = {
+          checkInterval: action.params.processingConfig?.checkInterval || 30000, // 30 segundos
+          maxMessagesPerBatch: action.params.processingConfig?.maxMessagesPerBatch || 5,
+          delayBetweenReplies: action.params.processingConfig?.delayBetweenReplies || { min: 2000, max: 8000 },
+          enableHumanization: action.params.processingConfig?.enableHumanization !== false
+        };
+
+        // Verificar se já existe um MessageProcessor ativo para este usuário
+        if (this.activeMessageProcessors.has(username)) {
+          console.log(`⚠️ MessageProcessor já está ativo para ${username}`);
+          return { success: false, message: 'MessageProcessor já está ativo para este usuário' };
+        }
+
+        try {
+          // Validar e criar instância do AIService
+          const validatedAiConfig = {
+            openaiApiKey: aiConfig.openaiApiKey || process.env.OPENAI_API_KEY || '',
+            googleApiKey: aiConfig.googleApiKey || process.env.GOOGLE_AI_API_KEY || '',
+            temperature: aiConfig.temperature || 0.7,
+            maxTokens: aiConfig.maxTokens || 150
+          };
+          
+          if (!validatedAiConfig.openaiApiKey && !validatedAiConfig.googleApiKey) {
+            throw new Error('Pelo menos uma chave de API (OpenAI ou Google AI) deve ser fornecida');
+          }
+          
+          const aiService = new AIService(validatedAiConfig);
+          
+          // Criar instância do MessageProcessor
+          const messageProcessor = new MessageProcessor(
+            aiService,
+            {
+              checkInterval: processingConfig.checkInterval ? processingConfig.checkInterval / 60000 : 0.5, // Converter ms para minutos
+              maxMessagesPerBatch: processingConfig.maxMessagesPerBatch || 5,
+              minResponseDelay: processingConfig.delayBetweenReplies?.min || 2000,
+              maxResponseDelay: processingConfig.delayBetweenReplies?.max || 5000,
+              timeWindowHours: 24,
+              enableHumanization: processingConfig.enableHumanization || true
+            }
+          );
+
+          // Inicializar o banco de dados para o usuário
+          await this.initializeDatabaseForUser(username);
+
+          // Iniciar o processamento
+          messageProcessor.startAutoProcessing();
+
+          // Armazenar a instância ativa
+          this.activeMessageProcessors.set(username, messageProcessor);
+
+          console.log(`🤖 MessageProcessor iniciado para ${username}`);
+          return { 
+            success: true, 
+            message: 'MessageProcessor iniciado com sucesso',
+            config: { aiConfig: { ...aiConfig, openaiApiKey: '***', googleApiKey: '***' }, processingConfig }
+          };
+        } catch (error: any) {
+          console.error(`❌ Erro ao iniciar MessageProcessor para ${username}:`, error.message);
+          throw new Error(`Falha ao iniciar MessageProcessor: ${error.message}`);
+        }
+
+      case 'stopMessageProcessor':
+        // Verificar se existe um MessageProcessor ativo para este usuário
+        const activeProcessor = this.activeMessageProcessors.get(username);
+        if (!activeProcessor) {
+          console.log(`⚠️ Nenhum MessageProcessor ativo encontrado para ${username}`);
+          return { success: false, message: 'Nenhum MessageProcessor ativo encontrado para este usuário' };
+        }
+
+        try {
+          // Parar o processamento
+          activeProcessor.stopAutoProcessing();
+
+          // Remover da lista de instâncias ativas
+          this.activeMessageProcessors.delete(username);
+
+          console.log(`🛑 MessageProcessor parado para ${username}`);
+          return { 
+            success: true, 
+            message: 'MessageProcessor parado com sucesso',
+            statistics: activeProcessor.getStats()
+          };
+        } catch (error: any) {
+          console.error(`❌ Erro ao parar MessageProcessor para ${username}:`, error.message);
+          throw new Error(`Falha ao parar MessageProcessor: ${error.message}`);
+        }
 
       default:
         throw new Error(`Tipo de ação não suportado: ${action.type}`);
@@ -343,6 +457,9 @@ export class WorkflowProcessor {
       endTime: new Date()
     };
 
+    // Armazenar resultado imediatamente para permitir interrupção
+    this.results.set(workflow.id, result);
+
     try {
       console.log(`🚀 Iniciando execução do workflow: ${workflow.name} (${workflow.id})`);
 
@@ -364,6 +481,13 @@ export class WorkflowProcessor {
 
       // Executar steps sequencialmente
       for (const step of workflow.steps) {
+        // Verificar se o workflow foi interrompido
+        const currentResult = this.results.get(workflow.id);
+        if (currentResult && currentResult.error === 'Workflow interrompido pelo usuário') {
+          console.log(`🛑 Workflow ${workflow.id} foi interrompido durante a execução`);
+          break;
+        }
+
         try {
           const stepResult = await this.executeStep(step, instance, workflow.username, result.results);
 
@@ -452,15 +576,40 @@ export class WorkflowProcessor {
    * Para a execução de um workflow (se possível)
    */
   async stopWorkflow(workflowId: string): Promise<boolean> {
-    const result = this.results.get(workflowId);
+    // Primeiro verificar se existe um resultado já armazenado
+    let result = this.results.get(workflowId);
+    
+    // Se não existe resultado, criar um temporário para workflows em execução
     if (!result) {
-      return false;
+      // Criar um resultado temporário para workflows que estão executando
+      result = {
+        workflowId: workflowId,
+        success: false,
+        executedSteps: [],
+        failedSteps: [],
+        results: {},
+        error: 'Workflow interrompido pelo usuário',
+        executionTime: 0,
+        startTime: new Date(),
+        endTime: new Date()
+      };
+      
+      // Armazenar o resultado temporário
+      this.results.set(workflowId, result);
+    } else {
+      // Marcar como parado se já existia
+      result.error = 'Workflow interrompido pelo usuário';
+      result.endTime = new Date();
+      result.executionTime = result.endTime.getTime() - result.startTime.getTime();
     }
 
-    // Marcar como parado (implementação básica)
-    result.error = 'Workflow interrompido pelo usuário';
-    result.endTime = new Date();
-    result.executionTime = result.endTime.getTime() - result.startTime.getTime();
+    // Parar qualquer MessageProcessor ativo relacionado a este workflow
+    if (this.activeMessageProcessors.has(workflowId)) {
+      const messageProcessor = this.activeMessageProcessors.get(workflowId)!;
+      await messageProcessor.stopAutoProcessing();
+      this.activeMessageProcessors.delete(workflowId);
+      console.log(`🛑 MessageProcessor para workflow ${workflowId} foi parado`);
+    }
 
     console.log(`🛑 Workflow ${workflowId} foi interrompido`);
     return true;
@@ -566,7 +715,7 @@ export function validateWorkflow(workflow: Workflow): { valid: boolean; errors: 
         errors.push(`Step ${index + 1}, Ação ${actionIndex + 1}: tipo de ação é obrigatório`);
       }
 
-      const validTypes = ['sendDirectMessage', 'likePost', 'followUser', 'unfollowUser', 'monitorMessages', 'monitorPosts', 'comment', 'delay'];
+      const validTypes = ['sendDirectMessage', 'likePost', 'followUser', 'unfollowUser', 'monitorMessages', 'monitorPosts', 'comment', 'delay', 'startMessageProcessor', 'stopMessageProcessor'];
       if (action.type && !validTypes.includes(action.type)) {
         errors.push(`Step ${index + 1}, Ação ${actionIndex + 1}: tipo de ação '${action.type}' não é válido`);
       }

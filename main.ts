@@ -1,3 +1,7 @@
+// Configurar dotenv primeiro para carregar variáveis de ambiente
+import * as dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
 import { Instagram, InstagramConfig } from './src';
