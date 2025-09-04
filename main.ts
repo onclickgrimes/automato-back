@@ -32,6 +32,32 @@ interface InitializeRequest {
 // Mapa para armazenar instâncias ativas do Instagram
 const activeInstances = new Map<string, Instagram>();
 
+// Mapa para armazenar conexões SSE ativas por username
+const sseConnections = new Map<string, express.Response[]>();
+
+// Função para enviar log para todas as conexões SSE de uma instância
+function sendLogToFrontend(username: string, logEntry: {
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  timestamp?: string;
+}) {
+  const connections = sseConnections.get(username) || [];
+  const logData = {
+    id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    timestamp: logEntry.timestamp || new Date().toLocaleTimeString(),
+    level: logEntry.level,
+    message: logEntry.message
+  };
+  
+  connections.forEach(res => {
+    try {
+      res.write(`data: ${JSON.stringify(logData)}\n\n`);
+    } catch (error) {
+      console.error('Erro ao enviar log via SSE:', error);
+    }
+  });
+}
+
 // Criar aplicação Express
 const app = express();
 const PORT = 3001;
@@ -39,6 +65,48 @@ const PORT = 3001;
 // Middlewares
 app.use(cors());
 app.use(express.json());
+
+// Endpoint SSE para logs da instância em tempo real
+app.get('/api/instagram/logs/:username', (req, res) => {
+  const { username } = req.params;
+  
+  // Configurar headers SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+  
+  // Adicionar conexão ao mapa
+  if (!sseConnections.has(username)) {
+    sseConnections.set(username, []);
+  }
+  sseConnections.get(username)!.push(res);
+  
+  console.log(`📡 Nova conexão SSE para logs de @${username}`);
+  
+  // Enviar log inicial de conexão
+  sendLogToFrontend(username, {
+    level: 'info',
+    message: `📡 Conectado aos logs da instância @${username}`
+  });
+  
+  // Cleanup quando conexão for fechada
+  req.on('close', () => {
+    const connections = sseConnections.get(username) || [];
+    const index = connections.indexOf(res);
+    if (index !== -1) {
+      connections.splice(index, 1);
+      console.log(`📡 Conexão SSE removida para @${username}`);
+    }
+    
+    if (connections.length === 0) {
+      sseConnections.delete(username);
+    }
+  });
+});
 
 // Função para garantir que o diretório existe
 function ensureDirectoryExists(dirPath: string) {
@@ -76,7 +144,8 @@ const workflowProcessor = new WorkflowProcessor(
   initializeDatabaseForUser,
   saveMessageToDatabase,
   'http://localhost:3000', // Frontend endpoint
-  '/api/instagram-accounts/posts' // Supabase route
+  '/api/instagram-accounts/posts', // Supabase route
+  sendLogToFrontend // Callback para logs SSE
 );
 
 // Mapa para armazenar workflows em execução
@@ -93,8 +162,18 @@ app.post('/api/instagram/iniciar', async (req, res) => {
     // Usar 'cookies' ou 'cookie' (compatibilidade)
     const cookieData = cookies || cookie;
 
+    // Enviar log inicial
+    sendLogToFrontend(username, {
+      level: 'info',
+      message: `🚀 Iniciando instância para @${username}...`
+    });
+
     // Validações básicas
     if (!accountId || !username || !auth_type) {
+      sendLogToFrontend(username, {
+        level: 'error',
+        message: '❌ Parâmetros obrigatórios não fornecidos (accountId, username, auth_type)'
+      });
       return res.status(400).json({
         success: false,
         error: 'Campos obrigatórios: accountId, username, auth_type'
@@ -102,6 +181,10 @@ app.post('/api/instagram/iniciar', async (req, res) => {
     }
 
     if (auth_type === 'credentials' && !password) {
+      sendLogToFrontend(username, {
+        level: 'error',
+        message: '❌ Password é obrigatório para autenticação por credenciais'
+      });
       return res.status(400).json({
         success: false,
         error: 'Password é obrigatório quando auth_type é credentials'
@@ -109,14 +192,35 @@ app.post('/api/instagram/iniciar', async (req, res) => {
     }
 
     if (auth_type === 'cookie' && !cookieData) {
+      sendLogToFrontend(username, {
+        level: 'error',
+        message: '❌ Cookies são obrigatórios para autenticação por cookie'
+      });
       return res.status(400).json({
         success: false,
         error: 'Cookies são obrigatórios quando auth_type é cookies'
       });
     }
 
+    // Log do tipo de autenticação
+    if (auth_type === 'credentials') {
+      sendLogToFrontend(username, {
+        level: 'info',
+        message: '🔐 Usando autenticação por credenciais'
+      });
+    } else {
+      sendLogToFrontend(username, {
+        level: 'info',
+        message: '🍪 Usando autenticação por cookies'
+      });
+    }
+
     // Verificar se já existe uma instância ativa para este username
     if (activeInstances.has(username)) {
+      sendLogToFrontend(username, {
+        level: 'warning',
+        message: `⚠️ Instância @${username} já está ativa`
+      });
       return res.status(200).json({
         success: true,
         message: 'Perfil já está ativo',
@@ -127,6 +231,11 @@ app.post('/api/instagram/iniciar', async (req, res) => {
 
     // Configurar Instagram baseado no tipo de autenticação
     let config: InstagramConfig;
+
+    sendLogToFrontend(username, {
+      level: 'info',
+      message: '⚙️ Configurando navegador...'
+    });
 
     if (auth_type === 'credentials') {
       config = {
@@ -152,11 +261,20 @@ app.post('/api/instagram/iniciar', async (req, res) => {
     // Criar instância do Instagram
     const ig = new Instagram(config);
 
+    sendLogToFrontend(username, {
+      level: 'info',
+      message: '🔑 Realizando login...'
+    });
+
     // Inicializar
     await ig.init();
 
     // Verificar se o login foi bem-sucedido
     if (!ig.loggedIn) {
+      sendLogToFrontend(username, {
+        level: 'error',
+        message: `❌ Falha na autenticação para @${username}`
+      });
       return res.status(401).json({
         success: false,
         error: 'Falha na autenticação. Verifique as credenciais ou cookies.'
@@ -165,11 +283,33 @@ app.post('/api/instagram/iniciar', async (req, res) => {
     
     console.log("LOGGED: ", ig.loggedIn);
     
+    sendLogToFrontend(username, {
+      level: 'info',
+      message: '💾 Inicializando banco de dados...'
+    });
+    
     // Inicializar banco de dados para o usuário
-    await initializeDatabaseForUser(username);
+    try {
+      await initializeDatabaseForUser(username);
+      sendLogToFrontend(username, {
+        level: 'success',
+        message: '💾 Banco de dados inicializado com sucesso'
+      });
+    } catch (dbError) {
+      console.error(`Erro ao inicializar banco para ${username}:`, dbError);
+      sendLogToFrontend(username, {
+        level: 'warning',
+        message: '⚠️ Erro ao inicializar banco de dados, mas instância continuará funcionando'
+      });
+    }
 
     // Armazenar a instância ativa usando username como chave
     activeInstances.set(username, ig);
+
+    sendLogToFrontend(username, {
+      level: 'success',
+      message: `✅ Instância @${username} iniciada com sucesso!`
+    });
 
     return res.status(200).json({
       success: true,
@@ -180,12 +320,20 @@ app.post('/api/instagram/iniciar', async (req, res) => {
     });
 
   } catch (error) {
+    const username = req.body.username || 'unknown';
+    const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+    
     console.error('Erro ao inicializar perfil:', error);
+
+    sendLogToFrontend(username, {
+      level: 'error',
+      message: `❌ Erro ao iniciar instância: ${errorMsg}`
+    });
 
     return res.status(500).json({
       success: false,
       error: 'Erro interno do servidor',
-      details: error instanceof Error ? error.message : 'Erro desconhecido'
+      details: errorMsg
     });
   }
 });
@@ -264,8 +412,17 @@ app.get('/api/instagram/status/:username', async (req, res) => {
 app.post('/api/instagram/parar/:username', async (req, res) => {
   const { username } = req.params;
 
+  sendLogToFrontend(username, {
+    level: 'info',
+    message: `🛑 Encerrando instância @${username}...`
+  });
+
   const instance = activeInstances.get(username);
   if (!instance) {
+    sendLogToFrontend(username, {
+      level: 'warning',
+      message: `⚠️ Instância @${username} não encontrada ou já foi encerrada`
+    });
     return res.status(404).json({
       success: false,
       error: `Instância '${username}' não está rodando`
@@ -273,8 +430,18 @@ app.post('/api/instagram/parar/:username', async (req, res) => {
   }
 
   try {
+    sendLogToFrontend(username, {
+      level: 'info',
+      message: '🔄 Fechando navegador...'
+    });
+
     await instance.close();
     activeInstances.delete(username);
+
+    sendLogToFrontend(username, {
+      level: 'success',
+      message: `✅ Instância @${username} encerrada com sucesso`
+    });
 
     return res.json({
       success: true,
@@ -283,6 +450,12 @@ app.post('/api/instagram/parar/:username', async (req, res) => {
     });
   } catch (error) {
     console.error(`Erro ao parar instância '${username}':`, error);
+    
+    sendLogToFrontend(username, {
+      level: 'error',
+      message: `❌ Erro ao encerrar instância: ${error instanceof Error ? error.message : 'Erro desconhecido'}`
+    });
+    
     return res.status(500).json({
       success: false,
       error: 'Erro interno do servidor ao parar instância'
@@ -297,15 +470,15 @@ app.post('/api/instagram/parar/:username', async (req, res) => {
 app.post('/api/instagram/workflow/execute', async (req, res) => {
   try {
     const { workflow, instanceName } = req.body;
-    console.log("INSTANCE NAME: ", instanceName);
-    console.log("RAW BODY: ", JSON.stringify(req.body, null, 2));
+    // console.log("INSTANCE NAME: ", instanceName);
+    // console.log("RAW BODY: ", JSON.stringify(req.body, null, 2));
 
     // Extrair o workflow correto da estrutura aninhada se necessário
     const actualWorkflow = workflow?.workflow || workflow;
     const actualInstanceName = instanceName || workflow?.instanceName;
     
-    console.log("PROCESSED WORKFLOW: ", JSON.stringify(actualWorkflow));
-    console.log("PROCESSED INSTANCE NAME: ", actualInstanceName);
+    // console.log("PROCESSED WORKFLOW: ", JSON.stringify(actualWorkflow));
+    // console.log("PROCESSED INSTANCE NAME: ", actualInstanceName);
 
     if (!actualWorkflow) {
       return res.status(400).json({

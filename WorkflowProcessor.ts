@@ -87,19 +87,32 @@ export class WorkflowProcessor {
   private saveMessageToDatabase: (username: string, messageData: any) => Promise<void>;
   private supabaseEndpoint: string;
   private frontendEndpoint: string;
+  private logCallback: ((username: string, logEntry: any) => void) | undefined;
 
   constructor(
     activeInstances: Map<string, Instagram>,
     initializeDatabaseForUser: (username: string) => Promise<void>,
     saveMessageToDatabase: (username: string, messageData: any) => Promise<void>,
     frontendEndpoint: string = 'http://localhost:3000',
-    supabaseRoute: string = '/api/instagram-accounts/posts'
+    supabaseRoute: string = '/api/instagram-accounts/posts',
+    logCallback?: (username: string, logEntry: any) => void
   ) {
     this.activeInstances = activeInstances;
     this.initializeDatabaseForUser = initializeDatabaseForUser;
     this.saveMessageToDatabase = saveMessageToDatabase;
     this.frontendEndpoint = frontendEndpoint;
     this.supabaseEndpoint = `${frontendEndpoint}${supabaseRoute}`;
+    this.logCallback = logCallback;
+  }
+
+  /**
+   * Envia log para o frontend via SSE
+   */
+  private sendLog(username: string, level: 'info' | 'success' | 'warning' | 'error', message: string) {
+    if (this.logCallback) {
+      this.logCallback(username, { level, message });
+    }
+    console.log(`[${username}] ${level.toUpperCase()}: ${message}`);
   }
 
   /**
@@ -139,13 +152,16 @@ export class WorkflowProcessor {
    * Executa uma ação específica do workflow
    */
   private async executeAction(action: WorkflowAction, instance: Instagram, username: string): Promise<any> {
-    console.log(`🔄 Executando ação: ${action.type}`);
+    this.sendLog(username, 'info', `🔄 Executando ação: ${action.type}`);
 
     switch (action.type) {
       case 'sendDirectMessage':
         if (!action.params.user || !action.params.message) {
+          this.sendLog(username, 'error', '❌ Parâmetros user e message são obrigatórios para sendDirectMessage');
           throw new Error('Parâmetros user e message são obrigatórios para sendDirectMessage');
         }
+        
+        this.sendLog(username, 'info', `💬 Enviando mensagem para @${action.params.user}`);
         
         // Verificar se já existe uma conversa ativa com este usuário
         try {
@@ -165,35 +181,54 @@ export class WorkflowProcessor {
           await knexInstance.destroy();
           
           if (existingChat) {
-            console.log(`💬 Conversa existente encontrada para @${action.params.user}, usando replyMessage com chat ID: ${existingChat.id}`);
-            return await instance.replyMessage(existingChat.id, action.params.message);
+            this.sendLog(username, 'info', `💬 Conversa existente encontrada para @${action.params.user}`);
+            const result = await instance.replyMessage(existingChat.id, action.params.message);
+            this.sendLog(username, 'success', `✅ Mensagem enviada para @${action.params.user}`);
+            return result;
           } else {
-            console.log(`📩 Nova conversa para @${action.params.user}, usando sendDirectMessage`);
-            return await instance.sendDirectMessage(action.params.user, action.params.message);
+            this.sendLog(username, 'info', `📩 Nova conversa para @${action.params.user}`);
+            const result = await instance.sendDirectMessage(action.params.user, action.params.message);
+            this.sendLog(username, 'success', `✅ Mensagem enviada para @${action.params.user}`);
+            return result;
           }
         } catch (dbError) {
+          this.sendLog(username, 'warning', 'Erro ao verificar conversa existente, tentando mensagem direta');
           console.warn(`⚠️ Erro ao consultar banco de dados para @${action.params.user}, usando sendDirectMessage como fallback:`, dbError);
-          return await instance.sendDirectMessage(action.params.user, action.params.message);
+          const result = await instance.sendDirectMessage(action.params.user, action.params.message);
+          this.sendLog(username, 'success', `✅ Mensagem enviada para @${action.params.user}`);
+          return result;
         }
 
       case 'likePost':
         if (!action.params.postId && !action.params.postUrl) {
+          this.sendLog(username, 'error', '❌ postId ou postUrl é obrigatório para likePost');
           throw new Error('Parâmetro postId ou postUrl é obrigatório para likePost');
         }
+        this.sendLog(username, 'info', `❤️ Curtindo post...`);
         const postId = action.params.postId || action.params.postUrl;
-        return await instance.likePost(postId!);
+        const likeResult = await instance.likePost(postId!);
+        this.sendLog(username, 'success', `✅ Post curtido com sucesso`);
+        return likeResult;
 
       case 'followUser':
         if (!action.params.username) {
+          this.sendLog(username, 'error', '❌ username é obrigatório para followUser');
           throw new Error('Parâmetro username é obrigatório para followUser');
         }
-        return await instance.followUser(action.params.username);
+        this.sendLog(username, 'info', `👤 Seguindo @${action.params.username}...`);
+        const followResult = await instance.followUser(action.params.username);
+        this.sendLog(username, 'success', `✅ Agora seguindo @${action.params.username}`);
+        return followResult;
 
       case 'unfollowUser':
         if (!action.params.username) {
+          this.sendLog(username, 'error', '❌ username é obrigatório para unfollowUser');
           throw new Error('Parâmetro username é obrigatório para unfollowUser');
         }
-        return await instance.unfollowUser(action.params.username);
+        this.sendLog(username, 'info', `👤 Deixando de seguir @${action.params.username}...`);
+        const unfollowResult = await instance.unfollowUser(action.params.username);
+        this.sendLog(username, 'success', `✅ Deixou de seguir @${action.params.username}`);
+        return unfollowResult;
 
       case 'comment':
         if (!action.params.postId || !action.params.comment) {
@@ -268,8 +303,9 @@ export class WorkflowProcessor {
         if (!action.params.duration) {
           throw new Error('Parâmetro duration é obrigatório para delay');
         }
-        console.log(`⏳ Aguardando ${action.params.duration}ms...`);
+        this.sendLog(username, 'info', `⏳ Aguardando ${action.params.duration}ms...`);
         await new Promise(resolve => setTimeout(resolve, action.params.duration));
+        this.sendLog(username, 'success', `✅ Delay de ${action.params.duration}ms concluído`);
         return { success: true, duration: action.params.duration };
 
       case 'startMessageProcessor':
@@ -489,6 +525,7 @@ export class WorkflowProcessor {
     this.results.set(workflow.id, result);
 
     try {
+      this.sendLog(instanceName, 'info', `🚀 Iniciando execução do workflow: ${workflow.name}`);
       console.log(`🚀 Iniciando execução do workflow: ${workflow.name} (${workflow.id})`);
 
       // Garantir que a instância do Instagram existe
@@ -523,13 +560,16 @@ export class WorkflowProcessor {
 
           if (stepResult.success) {
             result.executedSteps.push(step.id);
+            this.sendLog(instanceName, 'success', `✅ Step ${step.name} executado com sucesso`);
             console.log(`✅ Step ${step.id} executado com sucesso`);
           } else if (!stepResult.skipped) {
             result.failedSteps.push(step.id);
+            this.sendLog(instanceName, 'error', `❌ Step ${step.name} falhou`);
             console.error(`❌ Step ${step.id} falhou`);
 
             // Parar execução se configurado para parar em erro
             if (workflow.config?.stopOnError !== false) {
+              this.sendLog(instanceName, 'warning', `🛑 Parando execução devido a erro no step ${step.name}`);
               console.log(`🛑 Parando execução devido a erro no step ${step.id}`);
               break;
             }
@@ -543,6 +583,7 @@ export class WorkflowProcessor {
             error: error instanceof Error ? error.message : 'Erro desconhecido'
           };
 
+          this.sendLog(instanceName, 'error', `❌ Erro crítico no step ${step.name}: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
           console.error(`❌ Erro crítico no step ${step.id}:`, error);
 
           if (workflow.config?.stopOnError !== false) {
@@ -561,6 +602,7 @@ export class WorkflowProcessor {
 
     } catch (error) {
       result.error = error instanceof Error ? error.message : 'Erro desconhecido';
+      this.sendLog(instanceName, 'error', `❌ Erro na execução do workflow: ${result.error}`);
       console.error(`❌ Erro na execução do workflow ${workflow.id}:`, error);
     }
 
@@ -569,6 +611,15 @@ export class WorkflowProcessor {
 
     // Armazenar resultado
     this.results.set(workflow.id, result);
+
+    if (result.success) {
+      this.sendLog(instanceName, 'success', `🏁 Workflow ${workflow.name} finalizado com sucesso`);
+    } else {
+      this.sendLog(instanceName, 'warning', `🏁 Workflow ${workflow.name} finalizado com falhas`);
+    }
+    
+    this.sendLog(instanceName, 'info', `⏱️ Tempo de execução: ${result.executionTime}ms`);
+    this.sendLog(instanceName, 'info', `📊 Steps executados: ${result.executedSteps.length}, Steps falharam: ${result.failedSteps.length}`);
 
     console.log(`🏁 Workflow ${workflow.id} finalizado:`);
     console.log(`   - Sucesso: ${result.success}`);
