@@ -641,9 +641,10 @@ export class Instagram {
     }
 
     try {
-      console.log(`❤️ Curtindo post: https://www.instagram.com/p/${postId}/`);
+      const postIdOnly = this.extractPostId(postId);
+      console.log(`❤️ Curtindo post: https://www.instagram.com/p/${postIdOnly}/`);
 
-      await this.page.goto(`https://www.instagram.com/p/${postId}/`, { waitUntil: 'networkidle2' });
+      await this.page.goto(`https://www.instagram.com/p/${postIdOnly}/`, { waitUntil: 'networkidle2' });
       await this.randomDelay(2000, 4000);
 
       const likeSvgs = await this.page.$$('svg[aria-label="Curtir"][height="24"][width="24"]');

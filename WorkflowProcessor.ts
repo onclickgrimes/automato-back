@@ -9,17 +9,16 @@ import axios from 'axios';
 export interface WorkflowAction {
   type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay' | 'startMessageProcessor' | 'stopMessageProcessor';
   params: {
-    user?: string;
-    message?: string;
-    postId?: string;
-    postUrl?: string;
-    username?: string;
-    comment?: string;
-    duration?: number; // em milissegundos
-    includeRequests?: boolean;
-    checkInterval?: number;
-    maxExecutions?: number;
-    maxPostsPerUser?: number;
+    user?: string; // Usuário p quem será enviada a mensagem - Usado no sendDirectMessage
+    message?: string; // Conteúdo da mensagem para o usuário - Usado no sendDirectMessage
+    postId?: string; //Url do post que vai ser curtido - Usado no likePost e comment
+    username?: string; // Nome do usuário que vai sofrer a ação - Usado no followUser, unfollowUser e monitorPosts
+    comment?: string; // Mensagem a ser escrita no comentário - Usado no commentPost()
+    duration?: number; // Delay em milissegundos - Usado no delay no executeAction() (switch/case)
+    includeRequests?: boolean; // Verifica a caixa de Solicitações de mansagens? - Usado em monitorNewMessages()
+    checkInterval?: number; // Intervalo de verificação em milissegundos - Usado em monitorNewPostsFromUsers()
+    maxExecutions?: number; // Número de loops que monitorar posts deve fazer - Usado em monitorNewPostsFromUsers()
+    maxPostsPerUser?: number; // Número de primeiros posts que o loop deve extrair - Usado em monitorNewPostsFromUsers()
     onNewMessage?: (data: any) => void;
     onNewPost?: (data: any) => void;
     // Parâmetros para MessageProcessor
@@ -36,7 +35,6 @@ export interface WorkflowAction {
       enableHumanization?: boolean;
     };
   };
-  description?: string;
 }
 
 export interface WorkflowStep {
@@ -200,12 +198,12 @@ export class WorkflowProcessor {
         }
 
       case 'likePost':
-        if (!action.params.postId && !action.params.postUrl) {
+        if (!action.params.postId) {
           this.sendLog(username, 'error', '❌ postId ou postUrl é obrigatório para likePost');
           throw new Error('Parâmetro postId ou postUrl é obrigatório para likePost');
         }
         this.sendLog(username, 'info', `❤️ Curtindo post...`);
-        const postId = action.params.postId || action.params.postUrl;
+        const postId = action.params.postId
         const likeResult = await instance.likePost(postId!);
         this.sendLog(username, 'success', `✅ Post curtido com sucesso`);
         return likeResult;
@@ -250,6 +248,7 @@ export class WorkflowProcessor {
 
       case 'monitorPosts':
         if (!action.params.username) {
+          this.sendLog(username, 'error', '❌ username é obrigatório para monitorPosts');
           throw new Error('Parâmetro username é obrigatório para monitorPosts');
         }
         const postOptions = {
