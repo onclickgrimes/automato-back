@@ -13,6 +13,7 @@ export interface WorkflowAction {
     message?: string; // Conteúdo da mensagem para o usuário - Usado no sendDirectMessage
     postId?: string; //Url do post que vai ser curtido - Usado no likePost e comment
     username?: string; // Nome do usuário que vai sofrer a ação - Usado no followUser, unfollowUser e monitorPosts
+    usernames?: string[]; // Array de nomes de usuários - Usado no monitorPosts
     comment?: string; // Mensagem a ser escrita no comentário - Usado no commentPost()
     duration?: number; // Delay em milissegundos - Usado no delay no executeAction() (switch/case)
     includeRequests?: boolean; // Verifica a caixa de Solicitações de mansagens? - Usado em monitorNewMessages()
@@ -247,19 +248,30 @@ export class WorkflowProcessor {
         return await instance.monitorNewMessages(messageOptions);
 
       case 'monitorPosts':
-        if (!action.params.username) {
-          this.sendLog(username, 'error', '❌ username é obrigatório para monitorPosts');
-          throw new Error('Parâmetro username é obrigatório para monitorPosts');
+        // Determinar quais usuários monitorar - prioriza usernames se presente
+        let usersToMonitor: string[];
+        if (action.params.usernames && action.params.usernames.length > 0) {
+          usersToMonitor = action.params.usernames;
+          this.sendLog(username, 'info', `📸 Monitorando posts de ${usersToMonitor.length} usuários: ${usersToMonitor.join(', ')}`);
+        } else if (action.params.username) {
+          usersToMonitor = [action.params.username];
+          this.sendLog(username, 'info', `📸 Monitorando posts de @${action.params.username}`);
+        } else {
+          this.sendLog(username, 'error', '❌ username ou usernames é obrigatório para monitorPosts');
+          throw new Error('Parâmetro username ou usernames é obrigatório para monitorPosts');
         }
+        
         const postOptions = {
           checkInterval: action.params.checkInterval || 10000,
           maxPostsPerUser: action.params.maxPostsPerUser || 6,
           maxExecutions: action.params.maxExecutions || 1,
           onNewPosts: action.params.onNewPost || (async (posts: any[]) => {
+            this.sendLog(username, 'info', `📝 ${posts.length} novos posts detectados`);
             console.log(`📝 ${posts.length} novos posts detectados`);
             if (posts.length > 0) {
               try {
                 const resultado = await PostsDatabase.savePosts(posts, username);
+                this.sendLog(username, 'success', `💾 Salvamento: ${resultado.saved} novos, ${resultado.duplicates} atualizados`);
                 console.log(`💾 Salvamento: ${resultado.saved} novos, ${resultado.duplicates} atualizados`);
 
                 // Enviar dados para o Supabase via frontend
@@ -267,35 +279,47 @@ export class WorkflowProcessor {
                   await this.syncPostsToSupabase(posts, username);
                 }
               } catch (error: any) {
+                this.sendLog(username, 'error', `❌ Erro ao salvar posts no banco: ${error.message}`);
                 console.error('❌ Erro ao salvar posts no banco:', error.message);
               }
             }
           })
         };
+        
+        this.sendLog(username, 'info', `🔄 Iniciando monitoramento com intervalo de ${postOptions.checkInterval}ms`);
         const collectedPosts = await instance.monitorNewPostsFromUsers({
-          usernames: [action.params.username],
+          usernames: usersToMonitor,
           ...postOptions
         });
 
         // Salva todos os posts coletados no final
         if (collectedPosts.length > 0) {
           try {
+            this.sendLog(username, 'info', `💾 Salvando ${collectedPosts.length} posts coletados no banco...`);
             const resultadoFinal = await PostsDatabase.savePosts(collectedPosts, username);
+            this.sendLog(username, 'success', `💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
             console.log(`💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
 
             // Enviar dados para o Supabase via frontend
             if (resultadoFinal.saved > 0 || resultadoFinal.duplicates > 0) {
+              this.sendLog(username, 'info', '🔄 Sincronizando posts com Supabase...');
               await this.syncPostsToSupabase(collectedPosts, username);
+              this.sendLog(username, 'success', '✅ Posts sincronizados com Supabase');
             }
           } catch (error: any) {
+            this.sendLog(username, 'error', `❌ Erro ao salvar posts coletados no banco: ${error.message}`);
             console.error('❌ Erro ao salvar posts coletados no banco:', error.message);
           }
+        } else {
+          this.sendLog(username, 'info', '📭 Nenhum post novo foi coletado');
         }
 
+        this.sendLog(username, 'success', `✅ Monitoramento concluído. Total de posts coletados: ${collectedPosts.length}`);
         return {
           success: true,
           postsCollected: collectedPosts.length,
-          posts: collectedPosts
+          posts: collectedPosts,
+          monitoredUsers: usersToMonitor
         };
 
       case 'delay':
