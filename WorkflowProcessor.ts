@@ -57,7 +57,7 @@ export interface Workflow {
   id: string;
   name: string;
   description?: string;
-  username: string; // Username da instância do Instagram
+  instanceName: string; // Nome da instância do Instagram
   steps: WorkflowStep[];
   config?: {
     stopOnError?: boolean;
@@ -472,7 +472,7 @@ export class WorkflowProcessor {
   /**
    * Executa um workflow completo
    */
-  async executeWorkflow(workflow: Workflow): Promise<WorkflowResult> {
+  async executeWorkflow(workflow: Workflow, instanceName: string): Promise<WorkflowResult> {
     const startTime = new Date();
     const result: WorkflowResult = {
       workflowId: workflow.id,
@@ -492,11 +492,11 @@ export class WorkflowProcessor {
       console.log(`🚀 Iniciando execução do workflow: ${workflow.name} (${workflow.id})`);
 
       // Garantir que a instância do Instagram existe
-      const instance = await this.ensureInstagramInstance(workflow.username);
+      const instance = await this.ensureInstagramInstance(instanceName);
 
       // Verificar se a página está ativa
       if (!await instance.isPageActive()) {
-        throw new Error(`Página do usuário ${workflow.username} não está ativa`);
+        throw new Error(`Página do usuário ${instanceName} não está ativa`);
       }
 
       // Configurar timeout global se especificado
@@ -517,7 +517,7 @@ export class WorkflowProcessor {
         }
 
         try {
-          const stepResult = await this.executeStep(step, instance, workflow.username, result.results);
+          const stepResult = await this.executeStep(step, instance, instanceName, result.results);
 
           result.results[step.id] = stepResult;
 
@@ -716,11 +716,11 @@ export class WorkflowProcessor {
 /**
  * Função utilitária para validar estrutura do workflow
  */
-export function validateWorkflow(workflow: Workflow): { valid: boolean; errors: string[] } {
+export function validateWorkflow(workflow: Workflow, instanceName: string): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!workflow.id || !workflow.name || !workflow.username || !workflow.steps) {
-    errors.push('Workflow inválido: campos obrigatórios (id, name, username, steps) estão faltando');
+  if (!workflow.id || !workflow.name || !instanceName|| !workflow.steps) {
+    errors.push('Workflow inválido: campos obrigatórios (id, name, instanceName, steps) estão faltando');
   }
 
   if (!Array.isArray(workflow.steps) || workflow.steps.length === 0) {

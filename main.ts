@@ -296,18 +296,33 @@ app.post('/api/instagram/parar/:username', async (req, res) => {
  */
 app.post('/api/instagram/workflow/execute', async (req, res) => {
   try {
-    const { workflow } = req.body;
-    console.log("WORKFLOW: ", workflow);
+    const { workflow, instanceName } = req.body;
+    console.log("INSTANCE NAME: ", instanceName);
+    console.log("RAW BODY: ", JSON.stringify(req.body, null, 2));
 
-    if (!workflow) {
+    // Extrair o workflow correto da estrutura aninhada se necessário
+    const actualWorkflow = workflow?.workflow || workflow;
+    const actualInstanceName = instanceName || workflow?.instanceName;
+    
+    console.log("PROCESSED WORKFLOW: ", JSON.stringify(actualWorkflow));
+    console.log("PROCESSED INSTANCE NAME: ", actualInstanceName);
+
+    if (!actualWorkflow) {
       return res.status(400).json({
         success: false,
         error: 'Campo workflow é obrigatório'
       });
     }
 
+    if (!actualInstanceName) {
+      return res.status(400).json({
+        success: false,
+        error: 'Campo instanceName é obrigatório'
+      });
+    }
+
     // Validar estrutura do workflow
-    const validation = validateWorkflow(workflow);
+    const validation = validateWorkflow(actualWorkflow, actualInstanceName);
     if (!validation.valid) {
       return res.status(400).json({
         success: false,
@@ -317,33 +332,34 @@ app.post('/api/instagram/workflow/execute', async (req, res) => {
     }
 
     // Verificar se já existe um workflow rodando com o mesmo ID
-    if (runningWorkflows.has(workflow.id)) {
+    if (runningWorkflows.has(actualWorkflow.id)) {
       return res.status(409).json({
         success: false,
-        error: `Workflow '${workflow.id}' já está em execução`
+        error: `Workflow '${actualWorkflow.id}' já está em execução`
       });
     }
 
-    if (!activeInstances.has(workflow.username)) {
+    if (!activeInstances.has(actualInstanceName)) {
+      console.log("INSTANCES: ", Array.from(activeInstances.keys()));
       return res.status(400).json({
         success: false,
-        error: `Instância para ${workflow.username} não está ativa`
+        error: `Instância para ${actualInstanceName} não está ativa`
       });
     }
 
     // Executar workflow de forma assíncrona
-    const workflowPromise = workflowProcessor.executeWorkflow(workflow);
-    runningWorkflows.set(workflow.id, workflowPromise);
+    const workflowPromise = workflowProcessor.executeWorkflow(actualWorkflow, actualInstanceName);
+    runningWorkflows.set(actualWorkflow.id, workflowPromise);
 
     // Remover da lista quando terminar
     workflowPromise.finally(() => {
-      runningWorkflows.delete(workflow.id);
+      runningWorkflows.delete(actualWorkflow.id);
     });
 
     return res.json({
       success: true,
-      message: `Workflow '${workflow.id}' iniciado com sucesso`,
-      workflowId: workflow.id,
+      message: `Workflow '${actualWorkflow.id}' iniciado com sucesso`,
+      workflowId: actualWorkflow.id,
       status: 'running'
     });
 
