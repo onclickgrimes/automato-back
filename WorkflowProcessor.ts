@@ -245,7 +245,26 @@ export class WorkflowProcessor {
           })
         };
         instance.switchMessagesMonitoring(true);
-        return await instance.monitorNewMessages(messageOptions);
+        
+        this.sendLog(username, 'info', '📬 Iniciando monitoramento de mensagens');
+        
+        try {
+          const result = await instance.monitorNewMessages(messageOptions);
+          this.sendLog(username, 'success', '✅ Monitoramento de mensagens concluído');
+          return result;
+        } catch (error: any) {
+          // Verifica se o erro é devido à desconexão do navegador/página
+          const browserConnected = await instance.isBrowserConnected();
+          const pageActive = await instance.isPageActive();
+          
+          if (!browserConnected || !pageActive) {
+            this.sendLog(username, 'warning', '🔌 Conexão com o navegador perdida. Monitoramento de mensagens interrompido.');
+            throw new Error('Conexão com o navegador perdida');
+          }
+          
+          // Se não for erro de conectividade, relança o erro original
+          throw error;
+        }
 
       case 'monitorPosts':
         // Determinar quais usuários monitorar - prioriza usernames se presente
@@ -287,10 +306,26 @@ export class WorkflowProcessor {
         };
         
         this.sendLog(username, 'info', `🔄 Iniciando monitoramento com intervalo de ${postOptions.checkInterval}ms`);
-        const collectedPosts = await instance.monitorNewPostsFromUsers({
-          usernames: usersToMonitor,
-          ...postOptions
-        });
+        
+        let collectedPosts: any[] = [];
+        try {
+          collectedPosts = await instance.monitorNewPostsFromUsers({
+            usernames: usersToMonitor,
+            ...postOptions
+          });
+        } catch (error: any) {
+          // Verifica se o erro é devido à desconexão do navegador/página
+          const browserConnected = await instance.isBrowserConnected();
+          const pageActive = await instance.isPageActive();
+          
+          if (!browserConnected || !pageActive) {
+            this.sendLog(username, 'warning', '🔌 Conexão com o navegador perdida. Monitoramento interrompido.');
+            throw new Error('Conexão com o navegador perdida');
+          }
+          
+          // Se não for erro de conectividade, relança o erro original
+          throw error;
+        }
 
         // Salva todos os posts coletados no final
         if (collectedPosts.length > 0) {

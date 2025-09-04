@@ -1091,6 +1091,16 @@ export class Instagram {
     const url = 'https://www.instagram.com/direct/inbox/';
     await this.page!.goto(url, { waitUntil: 'networkidle2' });
     while (this.isMonitoringNewMessages) {
+      // Verifica conectividade antes de cada iteração
+      const browserConnected = await this.isBrowserConnected();
+      const pageActive = await this.isPageActive();
+      
+      if (!browserConnected || !pageActive) {
+        console.log('🔍 Página desconectada detectada no monitoramento de mensagens:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
+        this.isMonitoringNewMessages = false;
+        break;
+      }
+      
       if (!this.page!.url().includes("/direct/inbox/")) {
         try {
           await this.page!.goto(url, { waitUntil: 'networkidle2' });
@@ -1398,6 +1408,16 @@ export class Instagram {
     while (this.isMonitoringNewPostsFromUsers && (!maxExecutions || executionCount < maxExecutions)) {
       executionCount++;
 
+      // Verifica se o navegador e a página ainda estão conectados
+      const browserConnected = await this.isBrowserConnected();
+      const pageActive = await this.isPageActive();
+      
+      if (!browserConnected || !pageActive) {
+        console.log('🔍 Página desconectada detectada:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
+        this.isMonitoringNewPostsFromUsers = false;
+        break;
+      }
+
       // Circuit breaker: para se houver muitos erros consecutivos
       if (consecutiveErrors >= maxConsecutiveErrors) {
         console.error(`❌ Muitos erros consecutivos (${consecutiveErrors}). Parando monitoramento.`);
@@ -1410,6 +1430,16 @@ export class Instagram {
 
         for (const username of usernames) {
           if (!this.isMonitoringNewPostsFromUsers) break;
+          
+          // Verifica conectividade antes de processar cada usuário
+          const browserConnected = await this.isBrowserConnected();
+          const pageActive = await this.isPageActive();
+          
+          if (!browserConnected || !pageActive) {
+            console.log('🔍 Página desconectada detectada:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
+            this.isMonitoringNewPostsFromUsers = false;
+            break;
+          }
 
           // Função auxiliar para extrair 6 links de posts/reels de uma aba com retry
           const extractLinks = async (path: string, user: string, retries: number = 3) => {
@@ -1497,6 +1527,16 @@ export class Instagram {
             for (const post of merged) {
               if (!this.isMonitoringNewPostsFromUsers) break;
               if (!post.id || seenPosts.has(post.id)) continue;
+              
+              // Verifica conectividade antes de processar cada post
+              const browserConnected = await this.isBrowserConnected();
+              const pageActive = await this.isPageActive();
+              
+              if (!browserConnected || !pageActive) {
+                console.log('🔍 Página desconectada detectada:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
+                this.isMonitoringNewPostsFromUsers = false;
+                break;
+              }
 
               // Processa post individual com retry
               const processPost = async (postData: any, retries: number = 2) => {
