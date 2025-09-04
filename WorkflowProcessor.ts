@@ -254,7 +254,7 @@ export class WorkflowProcessor {
         const postOptions = {
           checkInterval: action.params.checkInterval || 10000,
           maxPostsPerUser: action.params.maxPostsPerUser || 6,
-          maxExecutions: action.params.maxExecutions || 1000,
+          maxExecutions: action.params.maxExecutions || 1,
           onNewPosts: action.params.onNewPost || (async (posts: any[]) => {
             console.log(`📝 ${posts.length} novos posts detectados`);
             if (posts.length > 0) {
