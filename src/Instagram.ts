@@ -4,7 +4,7 @@ import puppeteerExtra from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import * as fs from 'fs';
 import * as path from 'path';
-
+import os from 'os';
 // Adiciona o plugin stealth
 puppeteerExtra.use(StealthPlugin());
 
@@ -691,7 +691,7 @@ export class Instagram {
     try {
       const postIdOnly = this.extractPostId(postId);
       console.log(`💬 Comentando no post: ${postId}`);
-      
+
       await this.page.goto(`https://www.instagram.com/p/${postIdOnly}/`, { waitUntil: 'networkidle2' });
       await this.randomDelay(2000, 4000);
 
@@ -924,7 +924,8 @@ export class Instagram {
         // Upload da imagem
         const fileInput = await this.page.$('input[type="file"]');
         if (fileInput) {
-          await fileInput.uploadFile(imagePath);
+          const localPath = await this.downloadFile(imagePath, 'upload.jpg');
+          await fileInput.uploadFile(localPath);
           await this.randomDelay(3000, 5000);
 
           // Clica em "Avançar"
@@ -956,12 +957,14 @@ export class Instagram {
               if (shareButton) {
                 await this.page.evaluate((el) => (el as HTMLElement).click(), shareButton);
                 await this.randomDelay(5000, 8000)
+                fs.unlinkSync(localPath);
                 console.log('✅ Foto postada com sucesso');
                 return true;
               }
             }
           }
         }
+
       }
 
       console.log('⚠️ Não foi possível postar a foto');
@@ -1094,13 +1097,13 @@ export class Instagram {
       // Verifica conectividade antes de cada iteração
       const browserConnected = await this.isBrowserConnected();
       const pageActive = await this.isPageActive();
-      
+
       if (!browserConnected || !pageActive) {
         console.log('🔍 Página desconectada detectada no monitoramento de mensagens:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
         this.isMonitoringNewMessages = false;
         break;
       }
-      
+
       if (!this.page!.url().includes("/direct/inbox/")) {
         try {
           await this.page!.goto(url, { waitUntil: 'networkidle2' });
@@ -1411,7 +1414,7 @@ export class Instagram {
       // Verifica se o navegador e a página ainda estão conectados
       const browserConnected = await this.isBrowserConnected();
       const pageActive = await this.isPageActive();
-      
+
       if (!browserConnected || !pageActive) {
         console.log('🔍 Página desconectada detectada:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
         this.isMonitoringNewPostsFromUsers = false;
@@ -1430,11 +1433,11 @@ export class Instagram {
 
         for (const username of usernames) {
           if (!this.isMonitoringNewPostsFromUsers) break;
-          
+
           // Verifica conectividade antes de processar cada usuário
           const browserConnected = await this.isBrowserConnected();
           const pageActive = await this.isPageActive();
-          
+
           if (!browserConnected || !pageActive) {
             console.log('🔍 Página desconectada detectada:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
             this.isMonitoringNewPostsFromUsers = false;
@@ -1527,11 +1530,11 @@ export class Instagram {
             for (const post of merged) {
               if (!this.isMonitoringNewPostsFromUsers) break;
               if (!post.id || seenPosts.has(post.id)) continue;
-              
+
               // Verifica conectividade antes de processar cada post
               const browserConnected = await this.isBrowserConnected();
               const pageActive = await this.isPageActive();
-              
+
               if (!browserConnected || !pageActive) {
                 console.log('🔍 Página desconectada detectada:', !browserConnected ? 'Navegador fechado' : 'Página inativa');
                 this.isMonitoringNewPostsFromUsers = false;
@@ -1841,6 +1844,29 @@ export class Instagram {
       return input.trim(); // fallback se der erro no parse
     }
   }
+
+/**
+ * Faz download de um arquivo remoto e salva no diretório temporário local.
+ * Retorna o caminho absoluto do arquivo salvo.
+ */
+private async downloadFile(url: string, filename: string): Promise<string> {
+  // Usa fetch nativa do Node 18+
+  const res = await fetch(url);
+
+  if (!res.ok) {
+    throw new Error(`Erro ao baixar arquivo: ${res.status} ${res.statusText}`);
+  }
+
+  // Converte para Buffer
+  const arrayBuffer = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  // Salva no diretório temporário
+  const tempPath = path.join(os.tmpdir(), filename);
+  fs.writeFileSync(tempPath, buffer);
+
+  return tempPath;
+}
 
 
 }

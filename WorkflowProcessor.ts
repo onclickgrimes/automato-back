@@ -7,7 +7,7 @@ import axios from 'axios';
 
 // Interfaces para Workflow
 export interface WorkflowAction {
-  type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay' | 'startMessageProcessor' | 'stopMessageProcessor';
+  type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay' | 'startMessageProcessor' | 'stopMessageProcessor' | 'uploadPhoto';
   params: {
     user?: string; // Usuário p quem será enviada a mensagem - Usado no sendDirectMessage
     message?: string; // Conteúdo da mensagem para o usuário - Usado no sendDirectMessage
@@ -20,6 +20,8 @@ export interface WorkflowAction {
     checkInterval?: number; // Intervalo de verificação em milissegundos - Usado em monitorNewPostsFromUsers()
     maxExecutions?: number; // Número de loops que monitorar posts deve fazer - Usado em monitorNewPostsFromUsers()
     maxPostsPerUser?: number; // Número de primeiros posts que o loop deve extrair - Usado em monitorNewPostsFromUsers()
+    imagePath?: string; // Caminho da foto a ser enviada - Usado em uploadPhoto()
+    caption?: string; // Legenda da foto a ser enviada - Usado em uploadPhoto()
     onNewMessage?: (data: any) => void;
     onNewPost?: (data: any) => void;
     // Parâmetros para MessageProcessor
@@ -462,6 +464,13 @@ export class WorkflowProcessor {
           console.error(`❌ Erro ao parar MessageProcessor para ${username}:`, error.message);
           throw new Error(`Falha ao parar MessageProcessor: ${error.message}`);
         }
+      
+        case 'uploadPhoto':
+          if (!action.params.imagePath) {
+            throw new Error('Parâmetro imagePath é obrigatório para uploadPhoto');
+          }
+          await instance.postPhoto(action.params.imagePath, action.params.caption);
+          return { success: true, message: 'Foto enviada com sucesso' };
 
       default:
         throw new Error(`Tipo de ação não suportado: ${action.type}`);
@@ -852,7 +861,7 @@ export function validateWorkflow(workflow: Workflow, instanceName: string): { va
         errors.push(`Step ${index + 1}, Ação ${actionIndex + 1}: tipo de ação é obrigatório`);
       }
 
-      const validTypes = ['sendDirectMessage', 'likePost', 'followUser', 'unfollowUser', 'monitorMessages', 'monitorPosts', 'comment', 'delay', 'startMessageProcessor', 'stopMessageProcessor'];
+      const validTypes = ['sendDirectMessage', 'likePost', 'followUser', 'unfollowUser', 'monitorMessages', 'monitorPosts', 'comment', 'delay', 'startMessageProcessor', 'stopMessageProcessor', 'uploadPhoto'];
       if (action.type && !validTypes.includes(action.type)) {
         errors.push(`Step ${index + 1}, Ação ${actionIndex + 1}: tipo de ação '${action.type}' não é válido`);
       }
