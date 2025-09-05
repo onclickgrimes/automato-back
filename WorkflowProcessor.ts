@@ -7,7 +7,7 @@ import axios from 'axios';
 
 // Interfaces para Workflow
 export interface WorkflowAction {
-  type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay' | 'startMessageProcessor' | 'stopMessageProcessor' | 'uploadPhoto';
+  type: 'sendDirectMessage' | 'likePost' | 'followUser' | 'unfollowUser' | 'monitorMessages' | 'monitorPosts' | 'comment' | 'delay' | 'startMessageProcessor' | 'stopMessageProcessor' | 'uploadPhoto' | 'if' | 'forEach';
   params: {
     user?: string; // Usuário p quem será enviada a mensagem - Usado no sendDirectMessage
     message?: string; // Conteúdo da mensagem para o usuário - Usado no sendDirectMessage
@@ -37,7 +37,23 @@ export interface WorkflowAction {
       delayBetweenReplies?: { min: number; max: number };
       enableHumanization?: boolean;
     };
+    // Parâmetros para 'if'
+    variable?: string; // Referência do contexto a ser avaliada, ex: {{steps.monitorPosts.result.allLikers}}
+    operator?: 'isNotEmpty' | 'isEmpty' | 'equals' | 'greaterThan' | 'lessThan'; // Operador de comparação
+    value?: any; // Valor para comparação (usado com equals, greaterThan, lessThan)
+    _resolvedVariable?: any; // Valor resolvido injetado pelo executeWorkflow
+    // Parâmetros para 'forEach'
+    list?: string; // Referência do contexto para a lista a ser iterada, ex: {{steps.monitorPosts.result.allLikers}}
+    actions?: WorkflowAction[]; // Ações a serem executadas para cada item da lista
   };
+}
+
+// Interface para definir conexões entre steps (grafo)
+export interface WorkflowEdge {
+  id: string;
+  source: string; // ID do step de origem
+  target: string; // ID do step de destino
+  sourceHandle?: string; // Para condicionais: 'onTrue' ou 'onFalse'
 }
 
 export interface WorkflowStep {
@@ -60,6 +76,7 @@ export interface Workflow {
   description?: string;
   instanceName: string; // Nome da instância do Instagram
   steps: WorkflowStep[];
+  edges: WorkflowEdge[]; // Conexões entre steps (grafo)
   config?: {
     stopOnError?: boolean;
     logLevel?: 'debug' | 'info' | 'warn' | 'error';
@@ -114,6 +131,61 @@ export class WorkflowProcessor {
       this.logCallback(username, { level, message });
     }
     console.log(`[${username}] ${level.toUpperCase()}: ${message}`);
+  }
+
+  // Função auxiliar para resolver valores do contexto
+  private resolveValue(path: string, context: any, item?: any): any {
+    if (!path || typeof path !== 'string') {
+      return path;
+    }
+
+    // Se não é uma referência de template, retorna o valor original
+    if (!path.startsWith('{{') || !path.endsWith('}}')) {
+      return path;
+    }
+
+    const cleanPath = path.substring(2, path.length - 2).trim();
+
+    // Referência especial para o item atual do forEach
+    if (cleanPath === 'item' && item !== undefined) {
+      return item;
+    }
+
+    // Navega pelo contexto usando dot notation
+    const keys = cleanPath.split('.');
+    let value = context;
+    
+    for (const key of keys) {
+      if (value && typeof value === 'object' && key in value) {
+        value = value[key];
+      } else {
+        this.sendLog('system', 'warning', `⚠️ Referência não encontrada: ${path}`);
+        return null;
+      }
+    }
+    
+    return value;
+  }
+
+  // Função para resolver todos os parâmetros de uma ação
+  private resolveActionParams(params: any, context: any, item?: any): any {
+    const resolvedParams: any = {};
+    
+    for (const key in params) {
+      const value = params[key];
+      
+      if (typeof value === 'string') {
+        resolvedParams[key] = this.resolveValue(value, context, item);
+      } else if (Array.isArray(value)) {
+        resolvedParams[key] = value.map(v => 
+          typeof v === 'string' ? this.resolveValue(v, context, item) : v
+        );
+      } else {
+        resolvedParams[key] = value;
+      }
+    }
+    
+    return resolvedParams;
   }
 
   /**
@@ -329,34 +401,122 @@ export class WorkflowProcessor {
           throw error;
         }
 
-        // Salva todos os posts coletados no final
-        if (collectedPosts.length > 0) {
-          try {
-            this.sendLog(username, 'info', `💾 Salvando ${collectedPosts.length} posts coletados no banco...`);
-            const resultadoFinal = await PostsDatabase.savePosts(collectedPosts, username);
-            this.sendLog(username, 'success', `💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
-            console.log(`💾 Salvamento final: ${resultadoFinal.saved} novos, ${resultadoFinal.duplicates} atualizados`);
-
-            // Enviar dados para o Supabase via frontend
-            if (resultadoFinal.saved > 0 || resultadoFinal.duplicates > 0) {
-              this.sendLog(username, 'info', '🔄 Sincronizando posts com Banco de dados...');
-              await this.syncPostsToSupabase(collectedPosts, username);
-              this.sendLog(username, 'success', '✅ Posts sincronizados com Banco de dados');
-            }
-          } catch (error: any) {
-            this.sendLog(username, 'error', `❌ Erro ao salvar posts coletados no banco: ${error.message}`);
-            console.error('❌ Erro ao salvar posts coletados no banco:', error.message);
-          }
-        } else {
-          this.sendLog(username, 'info', '📭 Nenhum post novo foi coletado');
-        }
-
         this.sendLog(username, 'success', `✅ Monitoramento concluído. Total de posts coletados: ${collectedPosts.length}`);
-        return {
+        
+        // Retorna dados estruturados para uso em condicionais e loops
+        const result = {
           success: true,
           postsCollected: collectedPosts.length,
           posts: collectedPosts,
-          monitoredUsers: usersToMonitor
+          monitoredUsers: usersToMonitor,
+          // Dados estruturados para condicionais
+          hasNewPosts: collectedPosts.length > 0,
+          allLikers: collectedPosts.flatMap(post => post.likers || []),
+          allCommenters: collectedPosts.flatMap(post => post.commenters || []),
+          postsByUser: usersToMonitor.reduce((acc, user) => {
+            acc[user] = collectedPosts.filter(post => post.username === user);
+            return acc;
+          }, {} as { [key: string]: any[] })
+        };
+
+        return result;
+
+      case 'if':
+        // Avaliar condição
+        const variable = action.params._resolvedVariable !== undefined ? action.params._resolvedVariable : this.resolveValue(action.params.variable || '', { steps: {} });
+        const operator = action.params.operator || 'isNotEmpty';
+        const value = action.params.value;
+        
+        let conditionResult = false;
+        
+        switch (operator) {
+          case 'isNotEmpty':
+            conditionResult = variable !== null && variable !== undefined && variable !== '' && 
+                            (Array.isArray(variable) ? variable.length > 0 : true);
+            break;
+          case 'isEmpty':
+            conditionResult = variable === null || variable === undefined || variable === '' || 
+                           (Array.isArray(variable) && variable.length === 0);
+            break;
+          case 'equals':
+            conditionResult = variable === value;
+            break;
+          case 'greaterThan':
+            conditionResult = typeof variable === 'number' && typeof value === 'number' && variable > value;
+            break;
+          case 'lessThan':
+            conditionResult = typeof variable === 'number' && typeof value === 'number' && variable < value;
+            break;
+        }
+        
+        this.sendLog(username, 'info', `🔍 Condição ${operator}: ${conditionResult ? 'VERDADEIRA' : 'FALSA'}`);
+        
+        return {
+          success: true,
+          conditionResult,
+          variable,
+          operator,
+          value
+        };
+
+      case 'forEach':
+        // Obter lista para iteração
+        const list = this.resolveValue(action.params.list || '', { steps: {} });
+        
+        if (!Array.isArray(list)) {
+          throw new Error(`forEach requer uma lista, mas recebeu: ${typeof list}`);
+        }
+        
+        const forEachResults: any[] = [];
+        
+        this.sendLog(username, 'info', `🔄 Iniciando forEach com ${list.length} itens`);
+        
+        for (let i = 0; i < list.length; i++) {
+          const item = list[i];
+          this.sendLog(username, 'info', `📋 Processando item ${i + 1}/${list.length}`);
+          
+          const itemResults: any[] = [];
+          
+          // Executar ações para cada item
+          if (action.params.actions) {
+            for (const subAction of action.params.actions) {
+              // Resolver parâmetros com contexto do item atual
+              const resolvedParams = this.resolveActionParams(subAction.params, { steps: {} }, item);
+              const actionWithResolvedParams = { ...subAction, params: resolvedParams };
+              
+              try {
+                const actionResult = await this.executeAction(actionWithResolvedParams, instance, username);
+                itemResults.push({
+                  action: subAction.type,
+                  params: resolvedParams,
+                  result: actionResult,
+                  success: true
+                });
+              } catch (error) {
+                itemResults.push({
+                  action: subAction.type,
+                  params: resolvedParams,
+                  error: error instanceof Error ? error.message : 'Erro desconhecido',
+                  success: false
+                });
+                this.sendLog(username, 'error', `❌ Erro na ação ${subAction.type} do item ${i + 1}: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+              }
+            }
+          }
+          
+          forEachResults.push({
+            item,
+            index: i,
+            results: itemResults
+          });
+        }
+        
+        this.sendLog(username, 'success', `✅ forEach concluído: ${forEachResults.length} itens processados`);
+        
+        return {
+          success: true,
+          processedItems: forEachResults.length,
+          results: forEachResults
         };
 
       case 'delay':
@@ -514,12 +674,16 @@ export class WorkflowProcessor {
           console.log(`✅ Ação ${action.type} executada com sucesso`);
         }
 
+        // Para compatibilidade com referências de contexto, extrair o resultado da primeira ação se houver apenas uma
+        const result = stepResults.length === 1 ? stepResults[0].result : stepResults;
+        
         return {
           stepId: step.id,
           stepName: step.name,
           success: true,
           attempts: attempts,
-          results: stepResults
+          results: stepResults,
+          result: result // Adicionar resultado direto para facilitar referências
         };
 
       } catch (error) {
@@ -573,7 +737,7 @@ export class WorkflowProcessor {
   }
 
   /**
-   * Executa um workflow completo
+   * Executa um workflow completo usando motor de grafo
    */
   async executeWorkflow(workflow: Workflow, instanceName: string): Promise<WorkflowResult> {
     const startTime = new Date();
@@ -611,8 +775,14 @@ export class WorkflowProcessor {
         }, workflow.config.timeout);
       }
 
-      // Executar steps sequencialmente
-      for (const step of workflow.steps) {
+      // Motor de grafo: navegar por edges
+      const visitedSteps = new Set<string>();
+      const stepMap = new Map(workflow.steps.map(step => [step.id, step]));
+      
+      // Encontrar step inicial (sem edges de entrada ou primeiro step)
+      let currentStepId = this.findInitialStep(workflow);
+      
+      while (currentStepId && !visitedSteps.has(currentStepId)) {
         // Verificar se o workflow foi interrompido
         const currentResult = this.results.get(workflow.id);
         if (currentResult && currentResult.error === 'Workflow interrompido pelo usuário') {
@@ -620,15 +790,25 @@ export class WorkflowProcessor {
           break;
         }
 
-        try {
-          const stepResult = await this.executeStep(step, instance, instanceName, result.results);
+        const step = stepMap.get(currentStepId);
+        if (!step) {
+          this.sendLog(instanceName, 'error', `❌ Step ${currentStepId} não encontrado`);
+          break;
+        }
 
+        visitedSteps.add(currentStepId);
+
+        try {
+          const stepResult = await this.executeStepWithContext(step, instance, instanceName, result.results);
           result.results[step.id] = stepResult;
 
           if (stepResult.success) {
             result.executedSteps.push(step.id);
             this.sendLog(instanceName, 'success', `✅ Step ${step.name} executado com sucesso`);
             console.log(`✅ Step ${step.id} executado com sucesso`);
+            
+            // Navegar para próximo step baseado no resultado
+            currentStepId = this.getNextStep(workflow, currentStepId, stepResult);
           } else if (!stepResult.skipped) {
             result.failedSteps.push(step.id);
             this.sendLog(instanceName, 'error', `❌ Step ${step.name} falhou`);
@@ -640,6 +820,12 @@ export class WorkflowProcessor {
               console.log(`🛑 Parando execução devido a erro no step ${step.id}`);
               break;
             }
+            
+            // Navegar para próximo step mesmo com falha
+            currentStepId = this.getNextStep(workflow, currentStepId, stepResult);
+          } else {
+            // Step foi pulado, navegar para próximo
+            currentStepId = this.getNextStep(workflow, currentStepId, stepResult);
           }
         } catch (error) {
           result.failedSteps.push(step.id);
@@ -656,6 +842,11 @@ export class WorkflowProcessor {
           if (workflow.config?.stopOnError !== false) {
             break;
           }
+          
+          // Navegar para próximo step mesmo com erro
+           if (currentStepId) {
+             currentStepId = this.getNextStep(workflow, currentStepId, { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' });
+           }
         }
       }
 
@@ -695,6 +886,125 @@ export class WorkflowProcessor {
     console.log(`   - Tempo de execução: ${result.executionTime}ms`);
 
     return result;
+  }
+
+  /**
+   * Encontra o step inicial do workflow
+   */
+  private findInitialStep(workflow: Workflow): string | null {
+    // Se não há edges, usar o primeiro step
+    if (!workflow.edges || workflow.edges.length === 0) {
+      return workflow.steps.length > 0 ? workflow.steps[0].id : null;
+    }
+
+    // Encontrar step que não tem edges de entrada
+    const stepsWithIncomingEdges = new Set(workflow.edges.map(edge => edge.target));
+    const initialStep = workflow.steps.find(step => !stepsWithIncomingEdges.has(step.id));
+    
+    return initialStep ? initialStep.id : (workflow.steps.length > 0 ? workflow.steps[0].id : null);
+  }
+
+  /**
+   * Determina o próximo step baseado nos edges e resultado atual
+   */
+  private getNextStep(workflow: Workflow, currentStepId: string, stepResult: any): string | null {
+    // Se não há edges, usar execução sequencial
+    if (!workflow.edges || workflow.edges.length === 0) {
+      const currentIndex = workflow.steps.findIndex(step => step.id === currentStepId);
+      return currentIndex < workflow.steps.length - 1 ? workflow.steps[currentIndex + 1].id : null;
+    }
+
+    // Encontrar edges saindo do step atual
+    const outgoingEdges = workflow.edges.filter(edge => edge.source === currentStepId);
+    
+    if (outgoingEdges.length === 0) {
+      return null; // Fim do workflow
+    }
+
+    // Para condicionais, usar sourceHandle para determinar o caminho
+    if (outgoingEdges.length > 1) {
+      const targetEdge = outgoingEdges.find(edge => {
+        if (stepResult.success && edge.sourceHandle === 'onTrue') return true;
+        if (!stepResult.success && edge.sourceHandle === 'onFalse') return true;
+        return !edge.sourceHandle; // Edge padrão
+      });
+      
+      return targetEdge ? targetEdge.target : outgoingEdges[0].target;
+    }
+
+    // Apenas um edge, seguir ele
+    return outgoingEdges[0].target;
+  }
+
+  /**
+   * Executa um step com contexto de variáveis resolvidas
+   */
+  private async executeStepWithContext(step: WorkflowStep, instance: Instagram, username: string, previousResults: { [stepId: string]: any }): Promise<any> {
+    console.log(`📋 Executando step: ${step.name} (${step.id})`);
+
+    // Verifica condições
+    if (step.condition) {
+      const shouldExecute = this.evaluateCondition(step.condition, previousResults);
+      if (!shouldExecute) {
+        console.log(`⏭️ Step ${step.id} pulado devido à condição`);
+        return { skipped: true, reason: 'condition_not_met' };
+      }
+    }
+
+    const stepResults: any[] = [];
+    let attempts = 0;
+    const maxAttempts = step.retry?.maxAttempts || 1;
+    const retryDelay = step.retry?.delayMs || 1000;
+
+    while (attempts < maxAttempts) {
+      try {
+        attempts++;
+        console.log(`🔄 Tentativa ${attempts}/${maxAttempts} para step ${step.id}`);
+
+        // Executa todas as ações do step com contexto resolvido
+        for (const action of step.actions) {
+          // Resolver parâmetros com contexto
+          const resolvedParams = this.resolveActionParams(action.params, { steps: previousResults });
+          const actionWithResolvedParams = { ...action, params: resolvedParams };
+          
+          const actionResult = await this.executeAction(actionWithResolvedParams, instance, username);
+          stepResults.push({
+            action: action.type,
+            params: resolvedParams,
+            result: actionResult,
+            success: true
+          });
+          console.log(`✅ Ação ${action.type} executada com sucesso`);
+        }
+
+        return {
+          stepId: step.id,
+          stepName: step.name,
+          success: true,
+          attempts: attempts,
+          results: stepResults
+        };
+
+      } catch (error) {
+        console.error(`❌ Erro na tentativa ${attempts} do step ${step.id}:`, error);
+
+        if (attempts >= maxAttempts) {
+          return {
+            stepId: step.id,
+            stepName: step.name,
+            success: false,
+            attempts: attempts,
+            error: error instanceof Error ? error.message : 'Erro desconhecido',
+            results: stepResults
+          };
+        }
+
+        if (attempts < maxAttempts) {
+          console.log(`⏳ Aguardando ${retryDelay}ms antes da próxima tentativa...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
+      }
+    }
   }
 
   /**
