@@ -339,9 +339,9 @@ export class WorkflowProcessor {
 
             // Enviar dados para o Supabase via frontend
             if (resultadoFinal.saved > 0 || resultadoFinal.duplicates > 0) {
-              this.sendLog(username, 'info', '🔄 Sincronizando posts com Supabase...');
+              this.sendLog(username, 'info', '🔄 Sincronizando posts com Banco de dados...');
               await this.syncPostsToSupabase(collectedPosts, username);
-              this.sendLog(username, 'success', '✅ Posts sincronizados com Supabase');
+              this.sendLog(username, 'success', '✅ Posts sincronizados com Banco de dados');
             }
           } catch (error: any) {
             this.sendLog(username, 'error', `❌ Erro ao salvar posts coletados no banco: ${error.message}`);
@@ -794,14 +794,14 @@ export class WorkflowProcessor {
       });
 
       if (response.status === 200 || response.status === 201) {
-        console.log(`✅ Posts sincronizados com Supabase: ${posts.length} posts enviados`);
-        console.log(`📊 Resposta do Supabase:`, response.data);
+        console.log(`✅ Posts sincronizados com Banco de dados: ${posts.length} posts enviados`);
+        console.log(`📊 Resposta do Banco de dados:`, response.data);
       } else {
-        console.warn(`⚠️ Resposta inesperada do Supabase: ${response.status}`);
+        console.warn(`⚠️ Resposta inesperada do Banco de dados: ${response.status}`);
       }
 
     } catch (error: any) {
-      console.error('❌ Erro ao sincronizar posts com Supabase:', {
+      console.error('❌ Erro ao sincronizar posts com Banco de dados:', {
         message: error.message,
         endpoint: this.supabaseEndpoint,
         postsCount: posts.length,
