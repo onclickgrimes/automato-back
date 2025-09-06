@@ -154,7 +154,7 @@ export class WorkflowProcessor {
     // Navega pelo contexto usando dot notation
     const keys = cleanPath.split('.');
     let value = context;
-    
+
     for (const key of keys) {
       if (value && typeof value === 'object' && key in value) {
         value = value[key];
@@ -163,28 +163,28 @@ export class WorkflowProcessor {
         return null;
       }
     }
-    
+
     return value;
   }
 
   // Função para resolver todos os parâmetros de uma ação
   private resolveActionParams(params: any, context: any, item?: any): any {
     const resolvedParams: any = {};
-    
+
     for (const key in params) {
       const value = params[key];
-      
+
       if (typeof value === 'string') {
         resolvedParams[key] = this.resolveValue(value, context, item);
       } else if (Array.isArray(value)) {
-        resolvedParams[key] = value.map(v => 
+        resolvedParams[key] = value.map(v =>
           typeof v === 'string' ? this.resolveValue(v, context, item) : v
         );
       } else {
         resolvedParams[key] = value;
       }
     }
-    
+
     return resolvedParams;
   }
 
@@ -224,7 +224,7 @@ export class WorkflowProcessor {
   /**
    * Executa uma ação específica do workflow
    */
-  private async executeAction(action: WorkflowAction, instance: Instagram, username: string): Promise<any> {
+  private async executeAction(action: WorkflowAction, instance: Instagram, username: string, context?: any): Promise<any> {
     this.sendLog(username, 'info', `🔄 Executando ação: ${action.type}`);
 
     switch (action.type) {
@@ -233,9 +233,9 @@ export class WorkflowProcessor {
           this.sendLog(username, 'error', '❌ Parâmetros user e message são obrigatórios para sendDirectMessage');
           throw new Error('Parâmetros user e message são obrigatórios para sendDirectMessage');
         }
-        
+
         this.sendLog(username, 'info', `💬 Enviando mensagem para @${action.params.user}`);
-        
+
         // Verificar se já existe uma conversa ativa com este usuário
         try {
           const knexInstance = require('knex')({
@@ -245,14 +245,14 @@ export class WorkflowProcessor {
             },
             useNullAsDefault: true
           });
-          
+
           // Buscar chat existente pelo user_id (que é o username do Instagram)
           const existingChat = await knexInstance('chats')
             .where('user_id', action.params.user)
             .first();
-          
+
           await knexInstance.destroy();
-          
+
           if (existingChat) {
             this.sendLog(username, 'info', `💬 Conversa existente encontrada para @${action.params.user}`);
             const result = await instance.replyMessage(existingChat.id, action.params.message);
@@ -319,9 +319,9 @@ export class WorkflowProcessor {
           })
         };
         instance.switchMessagesMonitoring(true);
-        
+
         this.sendLog(username, 'info', '📬 Iniciando monitoramento de mensagens');
-        
+
         try {
           const result = await instance.monitorNewMessages(messageOptions);
           this.sendLog(username, 'success', '✅ Monitoramento de mensagens concluído');
@@ -330,12 +330,12 @@ export class WorkflowProcessor {
           // Verifica se o erro é devido à desconexão do navegador/página
           const browserConnected = await instance.isBrowserConnected();
           const pageActive = await instance.isPageActive();
-          
+
           if (!browserConnected || !pageActive) {
             this.sendLog(username, 'warning', '🔌 Conexão com o navegador perdida. Monitoramento de mensagens interrompido.');
             throw new Error('Conexão com o navegador perdida');
           }
-          
+
           // Se não for erro de conectividade, relança o erro original
           throw error;
         }
@@ -353,7 +353,7 @@ export class WorkflowProcessor {
           this.sendLog(username, 'error', '❌ username ou usernames é obrigatório para monitorPosts');
           throw new Error('Parâmetro username ou usernames é obrigatório para monitorPosts');
         }
-        
+
         const postOptions = {
           checkInterval: action.params.checkInterval || 10000,
           maxPostsPerUser: action.params.maxPostsPerUser || 6,
@@ -378,9 +378,9 @@ export class WorkflowProcessor {
             }
           })
         };
-        
+
         this.sendLog(username, 'info', `🔄 Iniciando monitoramento com intervalo de ${postOptions.checkInterval}ms`);
-        
+
         let collectedPosts: any[] = [];
         try {
           collectedPosts = await instance.monitorNewPostsFromUsers({
@@ -391,18 +391,18 @@ export class WorkflowProcessor {
           // Verifica se o erro é devido à desconexão do navegador/página
           const browserConnected = await instance.isBrowserConnected();
           const pageActive = await instance.isPageActive();
-          
+
           if (!browserConnected || !pageActive) {
             this.sendLog(username, 'warning', '🔌 Conexão com o navegador perdida. Monitoramento interrompido.');
             throw new Error('Conexão com o navegador perdida');
           }
-          
+
           // Se não for erro de conectividade, relança o erro original
           throw error;
         }
 
         this.sendLog(username, 'success', `✅ Monitoramento concluído. Total de posts coletados: ${collectedPosts.length}`);
-        
+
         // Retorna dados estruturados para uso em condicionais e loops
         const result = {
           success: true,
@@ -423,20 +423,20 @@ export class WorkflowProcessor {
 
       case 'if':
         // Avaliar condição
-        const variable = action.params._resolvedVariable !== undefined ? action.params._resolvedVariable : this.resolveValue(action.params.variable || '', { steps: {} });
+        const variable = action.params._resolvedVariable !== undefined ? action.params._resolvedVariable : this.resolveValue(action.params.variable || '', context || { steps: {} });
         const operator = action.params.operator || 'isNotEmpty';
         const value = action.params.value;
-        
+
         let conditionResult = false;
-        
+
         switch (operator) {
           case 'isNotEmpty':
-            conditionResult = variable !== null && variable !== undefined && variable !== '' && 
-                            (Array.isArray(variable) ? variable.length > 0 : true);
+            conditionResult = variable !== null && variable !== undefined && variable !== '' &&
+              (Array.isArray(variable) ? variable.length > 0 : true);
             break;
           case 'isEmpty':
-            conditionResult = variable === null || variable === undefined || variable === '' || 
-                           (Array.isArray(variable) && variable.length === 0);
+            conditionResult = variable === null || variable === undefined || variable === '' ||
+              (Array.isArray(variable) && variable.length === 0);
             break;
           case 'equals':
             conditionResult = variable === value;
@@ -448,9 +448,9 @@ export class WorkflowProcessor {
             conditionResult = typeof variable === 'number' && typeof value === 'number' && variable < value;
             break;
         }
-        
+
         this.sendLog(username, 'info', `🔍 Condição ${operator}: ${conditionResult ? 'VERDADEIRA' : 'FALSA'}`);
-        
+
         return {
           success: true,
           conditionResult,
@@ -461,31 +461,31 @@ export class WorkflowProcessor {
 
       case 'forEach':
         // Obter lista para iteração
-        const list = this.resolveValue(action.params.list || '', { steps: {} });
-        
+        const list = this.resolveValue(action.params.list || '', context || { steps: {} });
+
         if (!Array.isArray(list)) {
           throw new Error(`forEach requer uma lista, mas recebeu: ${typeof list}`);
         }
-        
+
         const forEachResults: any[] = [];
-        
+
         this.sendLog(username, 'info', `🔄 Iniciando forEach com ${list.length} itens`);
-        
+
         for (let i = 0; i < list.length; i++) {
           const item = list[i];
           this.sendLog(username, 'info', `📋 Processando item ${i + 1}/${list.length}`);
-          
+
           const itemResults: any[] = [];
-          
+
           // Executar ações para cada item
           if (action.params.actions) {
             for (const subAction of action.params.actions) {
               // Resolver parâmetros com contexto do item atual
               const resolvedParams = this.resolveActionParams(subAction.params, { steps: {} }, item);
               const actionWithResolvedParams = { ...subAction, params: resolvedParams };
-              
+
               try {
-                const actionResult = await this.executeAction(actionWithResolvedParams, instance, username);
+                const actionResult = await this.executeAction(actionWithResolvedParams, instance, username, context);
                 itemResults.push({
                   action: subAction.type,
                   params: resolvedParams,
@@ -503,16 +503,16 @@ export class WorkflowProcessor {
               }
             }
           }
-          
+
           forEachResults.push({
             item,
             index: i,
             results: itemResults
           });
         }
-        
+
         this.sendLog(username, 'success', `✅ forEach concluído: ${forEachResults.length} itens processados`);
-        
+
         return {
           success: true,
           processedItems: forEachResults.length,
@@ -559,13 +559,13 @@ export class WorkflowProcessor {
             temperature: aiConfig.temperature || 0.7,
             maxTokens: aiConfig.maxTokens || 150
           };
-          
+
           if (!validatedAiConfig.openaiApiKey && !validatedAiConfig.googleApiKey) {
             throw new Error('Pelo menos uma chave de API (OpenAI ou Google AI) deve ser fornecida');
           }
-          
+
           const aiService = new AIService(validatedAiConfig);
-          
+
           // Criar instância do MessageProcessor
           const messageProcessor = new MessageProcessor(
             aiService,
@@ -589,8 +589,8 @@ export class WorkflowProcessor {
           this.activeMessageProcessors.set(username, messageProcessor);
 
           console.log(`🤖 MessageProcessor iniciado para ${username}`);
-          return { 
-            success: true, 
+          return {
+            success: true,
             message: 'MessageProcessor iniciado com sucesso',
             config: { aiConfig: { ...aiConfig, openaiApiKey: '***', googleApiKey: '***' }, processingConfig }
           };
@@ -615,8 +615,8 @@ export class WorkflowProcessor {
           this.activeMessageProcessors.delete(username);
 
           console.log(`🛑 MessageProcessor parado para ${username}`);
-          return { 
-            success: true, 
+          return {
+            success: true,
             message: 'MessageProcessor parado com sucesso',
             statistics: activeProcessor.getStats()
           };
@@ -624,13 +624,13 @@ export class WorkflowProcessor {
           console.error(`❌ Erro ao parar MessageProcessor para ${username}:`, error.message);
           throw new Error(`Falha ao parar MessageProcessor: ${error.message}`);
         }
-      
-        case 'uploadPhoto':
-          if (!action.params.imagePath) {
-            throw new Error('Parâmetro imagePath é obrigatório para uploadPhoto');
-          }
-          await instance.postPhoto(action.params.imagePath, action.params.caption);
-          return { success: true, message: 'Foto enviada com sucesso' };
+
+      case 'uploadPhoto':
+        if (!action.params.imagePath) {
+          throw new Error('Parâmetro imagePath é obrigatório para uploadPhoto');
+        }
+        await instance.postPhoto(action.params.imagePath, action.params.caption);
+        return { success: true, message: 'Foto enviada com sucesso' };
 
       default:
         throw new Error(`Tipo de ação não suportado: ${action.type}`);
@@ -707,10 +707,10 @@ export class WorkflowProcessor {
       // Motor de grafo: navegar por edges
       const visitedSteps = new Set<string>();
       const stepMap = new Map(workflow.steps.map(step => [step.id, step]));
-      
+
       // Encontrar step inicial (sem edges de entrada ou primeiro step)
       let currentStepId = this.findInitialStep(workflow);
-      
+
       while (currentStepId && !visitedSteps.has(currentStepId)) {
         // Verificar se o workflow foi interrompido
         const currentResult = this.results.get(workflow.id);
@@ -735,7 +735,7 @@ export class WorkflowProcessor {
             result.executedSteps.push(step.id);
             this.sendLog(instanceName, 'success', `✅ Step ${step.name} executado com sucesso`);
             console.log(`✅ Step ${step.id} executado com sucesso`);
-            
+
             // Navegar para próximo step baseado no resultado
             currentStepId = this.getNextStep(workflow, currentStepId, stepResult);
           } else if (!stepResult.skipped) {
@@ -749,7 +749,7 @@ export class WorkflowProcessor {
               console.log(`🛑 Parando execução devido a erro no step ${step.id}`);
               break;
             }
-            
+
             // Navegar para próximo step mesmo com falha
             currentStepId = this.getNextStep(workflow, currentStepId, stepResult);
           } else {
@@ -771,11 +771,11 @@ export class WorkflowProcessor {
           if (workflow.config?.stopOnError !== false) {
             break;
           }
-          
+
           // Navegar para próximo step mesmo com erro
-           if (currentStepId) {
-             currentStepId = this.getNextStep(workflow, currentStepId, { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' });
-           }
+          if (currentStepId) {
+            currentStepId = this.getNextStep(workflow, currentStepId, { success: false, error: error instanceof Error ? error.message : 'Erro desconhecido' });
+          }
         }
       }
 
@@ -804,7 +804,7 @@ export class WorkflowProcessor {
     } else {
       this.sendLog(instanceName, 'warning', `🏁 Workflow ${workflow.name} finalizado com falhas`);
     }
-    
+
     this.sendLog(instanceName, 'info', `⏱️ Tempo de execução: ${result.executionTime}ms`);
     this.sendLog(instanceName, 'info', `📊 Steps executados: ${result.executedSteps.length}, Steps falharam: ${result.failedSteps.length}`);
 
@@ -829,7 +829,7 @@ export class WorkflowProcessor {
     // Encontrar step que não tem edges de entrada
     const stepsWithIncomingEdges = new Set(workflow.edges.map(edge => edge.target));
     const initialStep = workflow.steps.find(step => !stepsWithIncomingEdges.has(step.id));
-    
+
     return initialStep ? initialStep.id : (workflow.steps.length > 0 ? workflow.steps[0].id : null);
   }
 
@@ -845,7 +845,7 @@ export class WorkflowProcessor {
 
     // Encontrar edges saindo do step atual
     const outgoingEdges = workflow.edges.filter(edge => edge.source === currentStepId);
-    
+
     if (outgoingEdges.length === 0) {
       return null; // Fim do workflow
     }
@@ -853,11 +853,19 @@ export class WorkflowProcessor {
     // Para condicionais, usar sourceHandle para determinar o caminho
     if (outgoingEdges.length > 1) {
       const targetEdge = outgoingEdges.find(edge => {
-        if (stepResult.success && edge.sourceHandle === 'onTrue') return true;
-        if (!stepResult.success && edge.sourceHandle === 'onFalse') return true;
+        // Para ações condicionais (if), usar o conditionResult
+        if (stepResult.result && stepResult.result.conditionResult !== undefined) {
+          if (stepResult.result.conditionResult && edge.sourceHandle === 'onTrue') return true;
+          if (!stepResult.result.conditionResult && edge.sourceHandle === 'onFalse') return true;
+        }
+        // Para outros tipos de step, usar success
+        else {
+          if (stepResult.success && edge.sourceHandle === 'onTrue') return true;
+          if (!stepResult.success && edge.sourceHandle === 'onFalse') return true;
+        }
         return !edge.sourceHandle; // Edge padrão
       });
-      
+
       return targetEdge ? targetEdge.target : outgoingEdges[0].target;
     }
 
@@ -895,8 +903,8 @@ export class WorkflowProcessor {
           // Resolver parâmetros com contexto
           const resolvedParams = this.resolveActionParams(action.params, { steps: previousResults });
           const actionWithResolvedParams = { ...action, params: resolvedParams };
-          
-          const actionResult = await this.executeAction(actionWithResolvedParams, instance, username);
+
+          const actionResult = await this.executeAction(actionWithResolvedParams, instance, username, { steps: previousResults });
           stepResults.push({
             action: action.type,
             params: resolvedParams,
@@ -906,12 +914,16 @@ export class WorkflowProcessor {
           console.log(`✅ Ação ${action.type} executada com sucesso`);
         }
 
+        // Extrair resultado da primeira ação se houver apenas uma
+        const result = stepResults.length === 1 ? stepResults[0].result : stepResults;
+
         return {
           stepId: step.id,
           stepName: step.name,
           success: true,
           attempts: attempts,
-          results: stepResults
+          results: stepResults,
+          result: result
         };
 
       } catch (error) {
@@ -963,7 +975,7 @@ export class WorkflowProcessor {
   async stopWorkflow(workflowId: string): Promise<boolean> {
     // Primeiro verificar se existe um resultado já armazenado
     let result = this.results.get(workflowId);
-    
+
     // Se não existe resultado, criar um temporário para workflows em execução
     if (!result) {
       // Criar um resultado temporário para workflows que estão executando
@@ -978,7 +990,7 @@ export class WorkflowProcessor {
         startTime: new Date(),
         endTime: new Date()
       };
-      
+
       // Armazenar o resultado temporário
       this.results.set(workflowId, result);
     } else {
@@ -1076,7 +1088,7 @@ export class WorkflowProcessor {
 export function validateWorkflow(workflow: Workflow, instanceName: string): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!workflow.id || !workflow.name || !instanceName|| !workflow.steps) {
+  if (!workflow.id || !workflow.name || !instanceName || !workflow.steps) {
     errors.push('Workflow inválido: campos obrigatórios (id, name, instanceName, steps) estão faltando');
   }
 
@@ -1100,7 +1112,7 @@ export function validateWorkflow(workflow: Workflow, instanceName: string): { va
         errors.push(`Step ${index + 1}, Ação ${actionIndex + 1}: tipo de ação é obrigatório`);
       }
 
-      const validTypes = ['sendDirectMessage', 'likePost', 'followUser', 'unfollowUser', 'monitorMessages', 'monitorPosts', 'comment', 'delay', 'startMessageProcessor', 'stopMessageProcessor', 'uploadPhoto'];
+      const validTypes = ['sendDirectMessage', 'likePost', 'followUser', 'unfollowUser', 'monitorMessages', 'monitorPosts', 'comment', 'delay', 'startMessageProcessor', 'stopMessageProcessor', 'uploadPhoto', 'if', 'forEach'];
       if (action.type && !validTypes.includes(action.type)) {
         errors.push(`Step ${index + 1}, Ação ${actionIndex + 1}: tipo de ação '${action.type}' não é válido`);
       }
