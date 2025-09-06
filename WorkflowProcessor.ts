@@ -411,14 +411,14 @@ export class WorkflowProcessor {
           monitoredUsers: usersToMonitor,
           // Dados estruturados para condicionais
           hasNewPosts: collectedPosts.length > 0,
-          allLikers: collectedPosts.flatMap(post => post.likers || []),
+          allLikers: collectedPosts.flatMap(post => post.likedByUsers || []),
           allCommenters: collectedPosts.flatMap(post => post.commenters || []),
           postsByUser: usersToMonitor.reduce((acc, user) => {
             acc[user] = collectedPosts.filter(post => post.username === user);
             return acc;
           }, {} as { [key: string]: any[] })
         };
-
+        console.log('Resultado:', JSON.stringify(result));
         return result;
 
       case 'if':
