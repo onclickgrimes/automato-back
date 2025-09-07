@@ -20,6 +20,8 @@ export interface WorkflowAction {
     checkInterval?: number; // Intervalo de verificação em milissegundos - Usado em monitorNewPostsFromUsers()
     maxExecutions?: number; // Número de loops que monitorar posts deve fazer - Usado em monitorNewPostsFromUsers()
     maxPostsPerUser?: number; // Número de primeiros posts que o loop deve extrair - Usado em monitorNewPostsFromUsers()
+    maxPostAgeUnit?: 'minutes' | 'hours' | 'days'; // Unidade de tempo para idade máxima dos posts - Usado em monitorNewPostsFromUsers()
+    maxPostAge?: number; // Idade máxima dos posts em horas/minutos/dias - Usado em monitorNewPostsFromUsers()
     imagePath?: string; // Caminho da foto a ser enviada - Usado em uploadPhoto()
     caption?: string; // Legenda da foto a ser enviada - Usado em uploadPhoto()
     onNewMessage?: (data: any) => void;
@@ -149,6 +151,24 @@ export class WorkflowProcessor {
     // Referência especial para o item atual do forEach
     if (cleanPath === 'item' && item !== undefined) {
       return item;
+    }
+
+    // Referência para propriedades do item atual do forEach (ex: item.id, item.username)
+    if (cleanPath.startsWith('item.') && item !== undefined) {
+      const itemProperty = cleanPath.substring(5); // Remove 'item.'
+      const keys = itemProperty.split('.');
+      let value = item;
+      
+      for (const key of keys) {
+        if (value && typeof value === 'object' && key in value) {
+          value = value[key];
+        } else {
+          this.sendLog('system', 'warning', `⚠️ Referência não encontrada: ${path}`);
+          return null;
+        }
+      }
+      
+      return value;
     }
 
     // Navega pelo contexto usando dot notation
@@ -358,6 +378,8 @@ export class WorkflowProcessor {
           checkInterval: action.params.checkInterval || 10000,
           maxPostsPerUser: action.params.maxPostsPerUser || 6,
           maxExecutions: action.params.maxExecutions || 1,
+          maxPostAgeUnit: action.params.maxPostAgeUnit || 'hours',
+          maxPostAge: action.params.maxPostAge || 24,
           onNewPosts: action.params.onNewPost || (async (posts: any[]) => {
             this.sendLog(username, 'info', `📝 ${posts.length} novos posts detectados`);
             console.log(`📝 ${posts.length} novos posts detectados`);
@@ -481,7 +503,7 @@ export class WorkflowProcessor {
           if (action.params.actions) {
             for (const subAction of action.params.actions) {
               // Resolver parâmetros com contexto do item atual
-              const resolvedParams = this.resolveActionParams(subAction.params, { steps: {} }, item);
+              const resolvedParams = this.resolveActionParams(subAction.params, context, item);
               const actionWithResolvedParams = { ...subAction, params: resolvedParams };
 
               try {

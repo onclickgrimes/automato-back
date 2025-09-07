@@ -1379,6 +1379,8 @@ export class Instagram {
     checkInterval?: number;
     maxExecutions?: number;
     maxPostsPerUser?: number;
+    maxPostAgeUnit?: 'minutes' | 'hours' | 'days';
+    maxPostAge?: number;
     onNewPosts?: (posts: PostData[], executionCount: number, totalTime: number) => void;
   }): Promise<PostData[]> {
     if (!this.isLoggedIn || !this.page) {
@@ -1389,7 +1391,7 @@ export class Instagram {
     this.isMonitoringNewMessages = false;
     this.isMonitoringNewPostsFromUsers = true;
 
-    const { usernames, checkInterval = 60000, maxExecutions, maxPostsPerUser = 6, onNewPosts } = options;
+    const { usernames, checkInterval = 60000, maxExecutions, maxPostsPerUser = 6, maxPostAgeUnit = 'hours', maxPostAge = 24, onNewPosts } = options;
 
     console.log('📸 Iniciando monitoramento de posts de usuários...');
     console.log(`👥 Usuários monitorados: ${usernames.join(', ')}`);
@@ -1400,6 +1402,33 @@ export class Instagram {
     if (maxPostsPerUser) {
       console.log(`🔄 Máximo de posts por usuário: ${maxPostsPerUser}`);
     }
+    console.log(`⏰ Filtro de idade: ${maxPostAge} ${maxPostAgeUnit}`);
+
+    // Função auxiliar para verificar se o post está dentro do limite de idade
+    const isPostWithinAgeLimit = (postDate: string | null): boolean => {
+      if (!postDate) return true; // Se não há data, considera válido
+      
+      const now = new Date();
+      const postDateTime = new Date(postDate);
+      const diffMs = now.getTime() - postDateTime.getTime();
+      
+      let maxAgeMs: number;
+      switch (maxPostAgeUnit) {
+        case 'minutes':
+          maxAgeMs = maxPostAge * 60 * 1000;
+          break;
+        case 'hours':
+          maxAgeMs = maxPostAge * 60 * 60 * 1000;
+          break;
+        case 'days':
+          maxAgeMs = maxPostAge * 24 * 60 * 60 * 1000;
+          break;
+        default:
+          maxAgeMs = maxPostAge * 60 * 60 * 1000; // default para horas
+      }
+      
+      return diffMs <= maxAgeMs;
+    };
 
     const seenPosts = new Set<string>();
     const allCollectedPosts: PostData[] = [];
@@ -1623,29 +1652,41 @@ export class Instagram {
                     postData.comments = stats.comments;
                     postData.postDate = stats.postDate;
 
-                    // Coleta usuários que curtiram o post
-                    try {
-                      const likedByUsers = await this.getLikedByUsers(postData.url);
-                      postData.likedByUsers = likedByUsers;
-                      postData.followedLikers = false; // Inicialmente não seguiu os curtidores
+                    // Verifica se o post está dentro do limite de idade ANTES de coletar likes
+                    if (isPostWithinAgeLimit(postData.postDate)) {
+                      // Coleta usuários que curtiram o post apenas se estiver dentro do limite de idade
+                      try {
+                        const likedByUsers = await this.getLikedByUsers(postData.url);
+                        postData.likedByUsers = likedByUsers;
+                        postData.followedLikers = false; // Inicialmente não seguiu os curtidores
 
-                      if (likedByUsers.length > 0) {
-                        console.log(`👥 Coletados ${likedByUsers.length} usuários que curtiram o post`);
+                        if (likedByUsers.length > 0) {
+                          console.log(`👥 Coletados ${likedByUsers.length} usuários que curtiram o post`);
+                        }
+                      } catch (likeError: any) {
+                        console.warn(`⚠️ Erro ao coletar curtidores do post ${postData.url}:`, likeError.message);
+                        postData.likedByUsers = [];
+                        postData.followedLikers = false;
                       }
-                    } catch (likeError: any) {
-                      console.warn(`⚠️ Erro ao coletar curtidores do post ${postData.url}:`, likeError.message);
+
+                      seenPosts.add(postData.id);
+                      allNewPosts.push(postData);
+                      allCollectedPosts.push(postData);
+
+                      const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
+                      console.log(
+                        `📊 Post/Reel de @${username}: ${postData.likes} curtidas, ${postData.comments} comentários${dateInfo}`
+                      );
+                    } else {
+                      // Post fora do limite de idade - não coleta likes para economizar recursos
                       postData.likedByUsers = [];
                       postData.followedLikers = false;
+                      
+                      const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
+                      console.log(
+                        `⏰ Post/Reel de @${username} ignorado por idade${dateInfo} - fora do limite de ${maxPostAge} ${maxPostAgeUnit} (likes não coletados)`
+                      );
                     }
-
-                    seenPosts.add(postData.id);
-                    allNewPosts.push(postData);
-                    allCollectedPosts.push(postData);
-
-                    const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
-                    console.log(
-                      `📊 Post/Reel de @${username}: ${postData.likes} curtidas, ${postData.comments} comentários${dateInfo}`
-                    );
 
                     return true; // Sucesso
 
