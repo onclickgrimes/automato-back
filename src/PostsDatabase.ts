@@ -37,6 +37,7 @@ export interface InstagramPostRecord {
   likes: number;
   comments: number;
   post_date?: string;
+  caption?: string;
   liked_by_users?: string[];
   followed_likers?: boolean;
   created_at?: string;
@@ -71,6 +72,7 @@ export class PostsDatabase {
               likes: post.likes,
               comments: post.comments,
               post_date: post.postDate,
+              caption: post.caption || null,
               liked_by_users: post.likedByUsers ? JSON.stringify(post.likedByUsers) : null,
               followed_likers: post.followedLikers || false,
               updated_at: new Date().toISOString()
@@ -86,6 +88,7 @@ export class PostsDatabase {
             likes: post.likes,
             comments: post.comments,
             post_date: post.postDate,
+            caption: post.caption || null,
             liked_by_users: post.likedByUsers ? JSON.stringify(post.likedByUsers) : null,
             followed_likers: post.followedLikers || false,
             created_at: new Date().toISOString(),

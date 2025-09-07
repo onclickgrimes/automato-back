@@ -10,6 +10,7 @@ exports.up = function (knex) {
     table.string("username").notNullable();
     table.integer("likes").defaultTo(0);
     table.integer("comments").defaultTo(0);
+    table.text("caption").nullable().comment("Legenda do post do Instagram");
     table.datetime("post_date").nullable();
     table.timestamps(true, true);
     table

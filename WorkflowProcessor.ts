@@ -1051,13 +1051,14 @@ export class WorkflowProcessor {
             username: post.username,
             likes: post.likes || 0,
             comments: post.comments || 0,
+            caption: post.caption || '',
             post_date: post.postDate || post.post_date,
             liked_by_users: post.likedByUsers || [], // Esta linha está funcionalmente correta
             followed_likers: post.followedLikers || false
           };
         })
       };
-      // console.log(`📝 Payload para sincronização (completo):`, JSON.stringify(payload, null, 2));
+      console.log(`📝 Payload para sincronização (completo):`, JSON.stringify(payload, null, 2));
       const response = await axios.post(this.supabaseEndpoint, payload, {
         headers: {
           'Content-Type': 'application/json',

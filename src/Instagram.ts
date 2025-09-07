@@ -31,6 +31,7 @@ export interface PostData {
   post_date: any;
   comments: number;
   postDate?: string;
+  caption?: string;
   likedByUsers?: string[];
   followedLikers?: boolean;
 }
@@ -1641,16 +1642,31 @@ export class Instagram {
                           }
                         }
 
-                        return { likes, comments, postDate };
+                        // Busca legenda do post
+                        let caption = '';
+                        // Primeira tentativa: elemento h1
+                        let captionElement = document.querySelector('h1._ap3a._aaco._aacu._aacx._aad7._aade');
+                        if (captionElement) {
+                          caption = captionElement.textContent || '';
+                        } else {
+                          // Segunda tentativa: elemento span com style específico
+                          captionElement = document.querySelector('span.x193iq5w.x126k92a[style="line-height: 18px;"]');
+                          if (captionElement) {
+                            caption = captionElement.textContent || '';
+                          }
+                        }
+
+                        return { likes, comments, postDate, caption };
                       }),
                       new Promise((_, reject) =>
                         setTimeout(() => reject(new Error('Timeout ao extrair stats')), 8000)
                       )
-                    ]) as { likes: number; comments: number; postDate: string | null };
+                    ]) as { likes: number; comments: number; postDate: string | null; caption: string };
 
                     postData.likes = stats.likes;
                     postData.comments = stats.comments;
                     postData.postDate = stats.postDate;
+                    postData.caption = stats.caption;
 
                     // Verifica se o post está dentro do limite de idade ANTES de coletar likes
                     if (isPostWithinAgeLimit(postData.postDate)) {
@@ -1674,8 +1690,9 @@ export class Instagram {
                       allCollectedPosts.push(postData);
 
                       const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
+                      const captionInfo = postData.caption ? ` - Legenda: "${postData.caption.substring(0, 50)}${postData.caption.length > 50 ? '...' : ''}"` : '';
                       console.log(
-                        `📊 Post/Reel de @${username}: ${postData.likes} curtidas, ${postData.comments} comentários${dateInfo}`
+                        `📊 Post/Reel de @${username}: ${postData.likes} curtidas, ${postData.comments} comentários${dateInfo}${captionInfo}`
                       );
                     } else {
                       // Post fora do limite de idade - não coleta likes para economizar recursos
