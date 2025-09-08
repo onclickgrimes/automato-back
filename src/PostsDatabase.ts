@@ -73,7 +73,7 @@ export class PostsDatabase {
             .update({
               likes: post.likes,
               comments: post.comments,
-              post_date: post.postDate,
+              post_date: post.post_date,
               caption: post.caption || null,
               liked_by_users: post.likedByUsers ? JSON.stringify(post.likedByUsers) : null,
               followed_likers: post.followedLikers || false,
@@ -89,7 +89,7 @@ export class PostsDatabase {
             username: post.username,
             likes: post.likes,
             comments: post.comments,
-            post_date: post.postDate,
+            post_date: post.post_date,
             caption: post.caption || null,
             liked_by_users: post.likedByUsers ? JSON.stringify(post.likedByUsers) : null,
             followed_likers: post.followedLikers || false,

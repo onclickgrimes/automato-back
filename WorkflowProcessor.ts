@@ -362,22 +362,41 @@ export class WorkflowProcessor {
 
         // Se for AI, gera comentário aqui
         if (action.params.commentByAI) {
+          // Extrair postId do parâmetro
+          const postId = this.extractPostId(action.params.postId);
           this.sendLog(username, 'info', `🤖 Iniciando análise de vídeo para comentário`);
-          const post = await PostsDatabase.getPostById(action.params.postId, 'olavodecarvalho.ia');
-          if (!post?.generatedComment) {
+          const post = await PostsDatabase.getPostById(postId, 'olavodecarvalho.ia');
+          if (post && !post?.generatedComment) {
             // Construir URL completa do Instagram a partir do ID do post
-            const instagramUrl = post?.url || `https://www.instagram.com/p/${action.params.postId}/`;
+            const instagramUrl = post?.url || `https://www.instagram.com/p/${postId}/`;
 
             const { videoAnalysis, generatedComment, processingTime } = await this.aiService.analyzeInstagramVideo(instagramUrl, post?.caption, post?.username);
             // Salvar análise e comentário no banco de dados
-            await PostsDatabase.updatePost(action.params.postId, {
+            await PostsDatabase.updatePost(postId, {
               videoAnalysis,
               generatedComment
             }, 'olavodecarvalho.ia');
             this.sendLog(username, 'info', `🤖 Análise de vídeo concluída em ${processingTime}ms`);
+            finalComment = post?.generatedComment || '';
+            this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
           }
-          finalComment = post?.generatedComment || '';
-          this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
+          if (!post) {
+            // Construir URL completa do Instagram a partir do ID do post
+            const instagramUrl = `https://www.instagram.com/p/${postId}/`;
+            const postData = await instance.extractPostData(instagramUrl);
+            console.log("Instagram URL:", instagramUrl);
+            console.log("Post Data:", postData);
+            const { videoAnalysis, generatedComment, processingTime } = await this.aiService.analyzeInstagramVideo(instagramUrl, postData?.caption, postData?.username);
+            // Salvar análise e comentário no banco de dados
+            await PostsDatabase.updatePost(postId, {
+              videoAnalysis,
+              generatedComment
+            }, 'olavodecarvalho.ia');
+            this.sendLog(username, 'info', `🤖 Análise de vídeo concluída em ${processingTime}ms`);
+            finalComment = generatedComment || '';
+            this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
+          }
+
         }
 
         return await instance.commentPost(
@@ -1048,6 +1067,31 @@ export class WorkflowProcessor {
   }
 
   /**
+   * Extrai o postId de uma URL ou ID completo
+   */
+  private extractPostId(input: string): string {
+    try {
+      // Se for uma URL completa (com ou sem protocolo)
+      if (input.includes("instagram.com")) {
+        // Garante que tenha protocolo
+        const url = input.startsWith("http") ? input : `https://${input}`;
+        const parsed = new URL(url);
+
+        // URL padrão do Instagram: /p/:id/
+        const parts = parsed.pathname.split("/").filter(Boolean);
+        if (parts[0] === "p" && parts[1]) {
+          return parts[1];
+        }
+      }
+
+      // Caso contrário, assumimos que já é só o postId
+      return input.trim();
+    } catch {
+      return input.trim(); // fallback se der erro no parse
+    }
+  }
+
+  /**
    * Para a execução de um workflow (se possível)
    */
   async stopWorkflow(workflowId: string): Promise<boolean> {
@@ -1108,7 +1152,7 @@ export class WorkflowProcessor {
             likes: post.likes || 0,
             comments: post.comments || 0,
             caption: post.caption || '',
-            post_date: post.postDate || post.post_date,
+            post_date: post.post_date,
             liked_by_users: post.likedByUsers || [], // Esta linha está funcionalmente correta
             followed_likers: post.followedLikers || false
           };

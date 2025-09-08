@@ -30,7 +30,6 @@ export interface PostData {
   post_id: string;
   post_date: any;
   comments: number;
-  postDate?: string;
   caption?: string;
   likedByUsers?: string[];
   followedLikers?: boolean;
@@ -1773,6 +1772,165 @@ export class Instagram {
     }
 
     return allCollectedPosts;
+  }
+
+  /**
+   * Extrai dados de um único post do Instagram e salva no banco de dados
+   */
+  async extractPostData(postUrl: string): Promise<PostData | null> {
+    if (!this.isLoggedIn || !this.page) {
+      throw new Error('Usuário não está logado');
+    }
+
+    // Valida se é uma URL válida do Instagram
+    if (!postUrl.includes('instagram.com') || (!postUrl.includes('/p/') && !postUrl.includes('/reel/'))) {
+      throw new Error('URL inválida. Deve ser uma URL de post ou reel do Instagram.');
+    }
+
+    console.log(`🔍 Extraindo dados do post: ${postUrl}`);
+
+    try {
+      // Extrai o ID do post da URL
+      const postIdMatch = postUrl.match(/\/(p|reel)\/([^/]+)\//); 
+      const postId = postIdMatch ? postIdMatch[2] : '';
+      
+      if (!postId) {
+        throw new Error('Não foi possível extrair o ID do post da URL');
+      }
+
+      // Extrai o username da URL ou tenta detectar na página
+      let username = '';
+      const usernameMatch = postUrl.match(/instagram\.com\/([^/]+)\//); 
+      if (usernameMatch) {
+        username = usernameMatch[1];
+      }
+
+      // Navega para o post
+      await this.page.goto(postUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
+      });
+
+      await this.randomDelay(2000, 3000);
+
+      // Extrai dados do post
+      const postData = await this.page.evaluate(() => {
+        let likes = 0;
+        let comments = 0;
+        let username = '';
+        let postDate = null;
+        let caption = '';
+
+        // Busca curtidas pelo href específico '/liked_by/'
+        const likeLink = document.querySelector('a[href*="/liked_by/"]');
+        if (likeLink) {
+          const likeText = likeLink.textContent || '';
+          const likeMatch = likeText.match(/([\d,.]+)/);
+          if (likeMatch) {
+            likes = parseInt(likeMatch[1].replace(/[,.]/g, '')) || 0;
+          }
+        }
+
+        // Fallback: busca por texto genérico se não encontrar o link específico
+        if (likes === 0) {
+          const texts = Array.from(document.querySelectorAll('span, a')).map(
+            (el) => el.textContent || ''
+          );
+
+          for (const t of texts) {
+            if (/curtida|like/i.test(t)) {
+              const m = t.match(/([\d,.]+)/);
+              if (m) {
+                likes = parseInt(m[1].replace(/[,.]/g, '')) || 0;
+                break;
+              }
+            }
+          }
+        }
+
+        // Busca comentários
+        const texts = Array.from(document.querySelectorAll('span, a')).map(
+          (el) => el.textContent || ''
+        );
+
+        for (const t of texts) {
+          if (/comentário|comment/i.test(t)) {
+            const m = t.match(/([\d,.]+)/);
+            if (m) {
+              comments = parseInt(m[1].replace(/[,.]/g, '')) || 0;
+              break;
+            }
+          }
+        }
+
+        // Busca data da postagem
+        const timeElement = document.querySelector('time[datetime]');
+        if (timeElement) {
+          const datetime = timeElement.getAttribute('datetime');
+          if (datetime) {
+            postDate = new Date(datetime).toISOString();
+          }
+        }
+
+        // Busca legenda do post
+        // Primeira tentativa: elemento h1
+        let captionElement = document.querySelector('h1._ap3a._aaco._aacu._aacx._aad7._aade');
+        if (captionElement) {
+          caption = captionElement.textContent || '';
+        } else {
+          // Segunda tentativa: elemento span com style específico
+          captionElement = document.querySelector('span.x193iq5w.x126k92a[style="line-height: 18px;"]');
+          if (captionElement) {
+            caption = captionElement.textContent || '';
+          }
+        }
+
+        // Busca username se não foi extraído da URL
+        if (!username) {
+          const usernameElement = document.querySelector('a[href*="/"] span');
+          if (usernameElement) {
+            username = usernameElement.textContent || '';
+          }
+        }
+
+        return { likes, comments, postDate, caption, username };
+      });
+
+      // Se não conseguiu extrair username da página, usa o da URL ou deixa vazio
+      if (!postData.username && username) {
+        postData.username = username;
+      }
+
+      // Coleta usuários que curtiram o post
+      let likedByUsers: string[] = [];
+      try {
+        likedByUsers = await this.getLikedByUsers(postUrl);
+        if (likedByUsers.length > 0) {
+          console.log(`👥 Coletados ${likedByUsers.length} usuários que curtiram o post`);
+        }
+      } catch (likeError: any) {
+        console.warn(`⚠️ Erro ao coletar curtidores do post ${postUrl}:`, likeError.message);
+      }
+
+      // Cria objeto PostData
+        const post: PostData = {
+          url: postUrl,
+          post_id: postId,
+          post_date: postData.postDate || undefined,
+          likes: postData.likes,
+          comments: postData.comments,
+          username: postData.username || 'desconhecido',
+          caption: postData.caption,
+          likedByUsers: likedByUsers,
+          followedLikers: false
+        };
+
+      return post;
+
+    } catch (error: any) {
+      console.error(`❌ Erro ao extrair dados do post ${postUrl}:`, error.message);
+      throw error;
+    }
   }
 
   /**
