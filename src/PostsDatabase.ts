@@ -38,6 +38,8 @@ export interface InstagramPostRecord {
   comments: number;
   post_date?: string;
   caption?: string;
+  videoAnalysis?: string;
+  generatedComment?: string;
   liked_by_users?: string[];
   followed_likers?: boolean;
   created_at?: string;
@@ -106,6 +108,16 @@ export class PostsDatabase {
   }
 
   /**
+   * Busca post por ID
+   */
+  static async getPostById(postId: string, username?: string): Promise<InstagramPostRecord | null> {
+    const db = getDbConnection(username);
+    return await db('instagram_posts')
+      .where('post_id', postId)
+      .first();
+  }
+
+  /**
    * Busca posts por username
    */
   static async getPostsByUsername(username: string, dbUsername?: string): Promise<InstagramPostRecord[]> {
@@ -113,6 +125,17 @@ export class PostsDatabase {
     return await db('instagram_posts')
       .where('username', username)
       .orderBy('created_at', 'desc');
+  }
+
+  /**
+   * Atualiza um post existente
+   */
+  static async updatePost(postId: string, data: Partial<InstagramPostRecord>, username?: string): Promise<boolean> {
+    const db = getDbConnection(username);
+    const result = await db('instagram_posts')
+      .where('post_id', postId)
+      .update(data);
+    return result > 0;
   }
 
   /**

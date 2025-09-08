@@ -15,6 +15,7 @@ export interface WorkflowAction {
     username?: string; // Nome do usuário que vai sofrer a ação - Usado no followUser, unfollowUser e monitorPosts
     usernames?: string[]; // Array de nomes de usuários - Usado no monitorPosts
     comment?: string; // Mensagem a ser escrita no comentário - Usado no commentPost()
+    commentByAI?: boolean; // Comentar usando IA? - Usado no commentPost()
     duration?: number; // Delay em milissegundos - Usado no delay no executeAction() (switch/case)
     includeRequests?: boolean; // Verifica a caixa de Solicitações de mansagens? - Usado em monitorNewMessages()
     checkInterval?: number; // Intervalo de verificação em milissegundos - Usado em monitorNewPostsFromUsers()
@@ -108,7 +109,7 @@ export class WorkflowProcessor {
   private supabaseEndpoint: string;
   private frontendEndpoint: string;
   private logCallback: ((username: string, logEntry: any) => void) | undefined;
-
+  private aiService: AIService;
   constructor(
     activeInstances: Map<string, Instagram>,
     initializeDatabaseForUser: (username: string) => Promise<void>,
@@ -123,6 +124,30 @@ export class WorkflowProcessor {
     this.frontendEndpoint = frontendEndpoint;
     this.supabaseEndpoint = `${frontendEndpoint}${supabaseRoute}`;
     this.logCallback = logCallback;
+
+    // Inicializar AIService com configuração padrão
+    const aiConfig: any = {
+      defaultProvider: 'google' as const,
+      temperature: 0.7,
+      maxTokens: 150
+    };
+
+    if (process.env.OPENAI_API_KEY) {
+      aiConfig.openaiApiKey = process.env.OPENAI_API_KEY;
+    }
+
+    if (process.env.GOOGLE_API_KEY) {
+      aiConfig.googleApiKey = process.env.GOOGLE_API_KEY;
+    }
+
+    // Garantir que pelo menos uma chave de API esteja disponível
+    if (!aiConfig.openaiApiKey && !aiConfig.googleApiKey) {
+      console.warn('⚠️ Nenhuma chave de API configurada para AIService. Funcionalidades de IA podem não funcionar.');
+      // Criar com configuração mínima para evitar erro
+      aiConfig.googleApiKey = 'dummy-key';
+    }
+
+    this.aiService = new AIService(aiConfig);
   }
 
   /**
@@ -158,7 +183,7 @@ export class WorkflowProcessor {
       const itemProperty = cleanPath.substring(5); // Remove 'item.'
       const keys = itemProperty.split('.');
       let value = item;
-      
+
       for (const key of keys) {
         if (value && typeof value === 'object' && key in value) {
           value = value[key];
@@ -167,7 +192,7 @@ export class WorkflowProcessor {
           return null;
         }
       }
-      
+
       return value;
     }
 
@@ -324,10 +349,41 @@ export class WorkflowProcessor {
         return unfollowResult;
 
       case 'comment':
-        if (!action.params.postId || !action.params.comment) {
-          throw new Error('Parâmetros postId e comment são obrigatórios para comment');
+        if (!action.params.postId) {
+          throw new Error('postId is required for comment action');
         }
-        return await instance.commentPost(action.params.postId, action.params.comment);
+
+        // Se não for commentByAI, precisa do comment
+        if (!action.params.commentByAI && !action.params.comment) {
+          throw new Error('O parâmetro "comment" é obrigatório quando commentByAI não é usado');
+        }
+
+        let finalComment = action.params.comment || '';
+
+        // Se for AI, gera comentário aqui
+        if (action.params.commentByAI) {
+          this.sendLog(username, 'info', `🤖 Iniciando análise de vídeo para comentário`);
+          const post = await PostsDatabase.getPostById(action.params.postId, 'olavodecarvalho.ia');
+          if (!post?.generatedComment) {
+            // Construir URL completa do Instagram a partir do ID do post
+            const instagramUrl = post?.url || `https://www.instagram.com/p/${action.params.postId}/`;
+
+            const { videoAnalysis, generatedComment, processingTime } = await this.aiService.analyzeInstagramVideo(instagramUrl, post?.caption, post?.username);
+            // Salvar análise e comentário no banco de dados
+            await PostsDatabase.updatePost(action.params.postId, {
+              videoAnalysis,
+              generatedComment
+            }, 'olavodecarvalho.ia');
+            this.sendLog(username, 'info', `🤖 Análise de vídeo concluída em ${processingTime}ms`);
+          }
+          finalComment = post?.generatedComment || '';
+          this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
+        }
+
+        return await instance.commentPost(
+          action.params.postId,
+          finalComment || '',
+        );
 
       case 'monitorMessages':
         const messageOptions = {

@@ -218,6 +218,206 @@ const resolvedParams = this.resolveActionParams(subAction.params, context, item)
 ✅ **Scripts de teste validados**
 ✅ **WorkflowProcessor.ts corrigido**
 
+## Migrações do Supabase
+
+### 1. Adicionar coluna caption à tabela instagram_posts
+
+**Arquivo:** `add_caption_to_supabase.sql`
+
+**Descrição:** Adiciona a coluna `caption` à tabela `instagram_posts` no Supabase para armazenar as legendas dos posts do Instagram.
+
+**SQL:**
+```sql
+ALTER TABLE instagram_posts 
+ADD COLUMN caption TEXT;
+```
+
+**Como aplicar:**
+1. Acesse o painel do Supabase
+2. Vá para SQL Editor
+3. Execute o comando SQL acima
+4. Verifique se a coluna foi criada com sucesso
+
+**Status:** Pendente
+
+**Impacto:** Permite salvar legendas dos posts do Instagram no Supabase, resolvendo o problema onde `caption: null` aparecia nas respostas da API.
+
+### 2. Criar tabela para análises de vídeo
+
+**Arquivo:** `add_video_analysis_table.sql`
+
+**Descrição:** Cria a tabela `video_analyses` para armazenar análises de vídeos do Instagram geradas pelo Gemini AI.
+
+**SQL:**
+```sql
+CREATE TABLE IF NOT EXISTS video_analyses (
+    id BIGSERIAL PRIMARY KEY,
+    post_id TEXT NOT NULL UNIQUE,
+    username TEXT NOT NULL,
+    caption TEXT,
+    video_analysis TEXT NOT NULL,
+    generated_comment TEXT NOT NULL,
+    processing_time INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Criar índices para performance
+CREATE INDEX IF NOT EXISTS idx_video_analyses_post_id ON video_analyses(post_id);
+CREATE INDEX IF NOT EXISTS idx_video_analyses_username ON video_analyses(username);
+CREATE INDEX IF NOT EXISTS idx_video_analyses_created_at ON video_analyses(created_at);
+```
+
+**Como aplicar:**
+1. Acesse o painel do Supabase
+2. Vá para SQL Editor
+3. Execute o SQL completo do arquivo `add_video_analysis_table.sql`
+4. Verifique se a tabela e índices foram criados
+
+**Status:** Pendente
+
+**Impacto:** Permite armazenar análises de vídeos do Instagram processadas pelo Gemini, incluindo descrições detalhadas e comentários gerados automaticamente.
+
+## Funcionalidade de Análise de Vídeo com Gemini
+
+### Visão Geral
+
+A funcionalidade de análise de vídeo permite processar vídeos do Instagram usando o modelo Gemini 2.0 Flash da Google AI. O sistema:
+
+1. **Baixa o vídeo** do Instagram (simulado na versão atual)
+2. **Envia para o Gemini** para análise visual detalhada
+3. **Combina a análise** com a legenda original do post
+4. **Gera um comentário** natural e engajador
+5. **Armazena os resultados** no banco de dados
+
+### Arquivos Principais
+
+#### `src/AIService.ts`
+- **Método principal:** `analyzeInstagramVideo(videoUrl, caption?, username?)`
+- **Funcionalidades:**
+  - Download de vídeo (simulado)
+  - Upload para Gemini via base64
+  - Análise visual detalhada
+  - Geração de comentários contextualizados
+  - Limpeza automática de arquivos temporários
+
+#### `src/VideoAnalysisIntegration.ts`
+- **Classe:** `VideoAnalysisIntegration`
+- **Funcionalidades:**
+  - Integração com workflow do Instagram
+  - Processamento em lote de vídeos
+  - Cache de análises existentes
+  - Estatísticas de processamento
+
+#### `test-video-analysis.js`
+- Script de teste para validar a funcionalidade
+- Testes com múltiplos cenários
+- Verificação de configuração do Gemini
+
+### Configuração Necessária
+
+```javascript
+// Variáveis de ambiente
+GOOGLE_API_KEY=sua_chave_do_google_ai
+
+// Inicialização
+const aiService = new AIService({
+  googleApiKey: process.env.GOOGLE_API_KEY
+});
+```
+
+### Exemplo de Uso
+
+```javascript
+// Análise simples (método direto)
+const result = await aiService.analyzeInstagramVideo(
+  'https://www.instagram.com/reel/ABC123/',
+  'Momento incrível na praia! 🌊',
+  'usuario_exemplo'
+);
+
+console.log('Análise:', result.videoAnalysis);
+console.log('Comentário:', result.generatedComment);
+
+// Integração completa com opções de comentário
+const integration = new VideoAnalysisIntegration(aiService, postsDatabase);
+
+// OPÇÃO 1: IA completa (análise + comentário gerado)
+const result1 = await integration.processInstagramVideo(videoData, {
+  useAI: true,
+  generateAnalysis: true
+});
+
+// OPÇÃO 2: Comentário fixo + análise do vídeo
+const result2 = await integration.processInstagramVideo(videoData, {
+  useAI: false,
+  fixedComment: 'Conteúdo incrível! Parabéns! 🔥',
+  generateAnalysis: true
+});
+
+// OPÇÃO 3: Comentário fixo sem análise (mais rápido)
+const result3 = await integration.processInstagramVideo(videoData, {
+  useAI: false,
+  fixedComment: 'Ótimo post! 👏',
+  generateAnalysis: false
+});
+
+// OPÇÃO 4: IA apenas para comentário (sem análise detalhada)
+const result4 = await integration.processInstagramVideo(videoData, {
+  useAI: true,
+  generateAnalysis: false
+});
+```
+
+### Estrutura da Resposta
+
+```typescript
+// Resultado da análise direta (AIService)
+interface VideoAnalysisResult {
+  videoAnalysis: string;      // Descrição detalhada do vídeo
+  generatedComment: string;   // Comentário gerado
+  processingTime: number;     // Tempo de processamento em ms
+  videoPath?: string;         // Path do arquivo (removido após uso)
+}
+
+// Resultado da integração completa
+interface VideoAnalysisIntegrationResult {
+  postId: string;            // ID do post processado
+  videoAnalysis: string;     // Análise do vídeo (ou mensagem se não gerada)
+  generatedComment: string;  // Comentário (gerado por IA ou fixo)
+  processingTime: number;    // Tempo total de processamento
+  saved: boolean;           // Se foi salvo no banco com sucesso
+  error?: string;           // Mensagem de erro (se houver)
+}
+
+// Opções de comentário
+interface CommentOptions {
+  useAI?: boolean;           // Se true, gera comentário via IA (padrão: true)
+  fixedComment?: string;     // Comentário fixo (usado quando useAI = false)
+  generateAnalysis?: boolean; // Se deve gerar análise do vídeo (padrão: true)
+}
+```
+
+### Modelos Gemini Utilizados
+
+- **Análise de vídeo:** `gemini-2.0-flash-exp`
+- **Geração de comentários:** `gemini-pro`
+
+### Limitações Atuais
+
+1. **Download simulado:** A versão atual simula o download de vídeos
+2. **Dependência do Gemini:** Requer API key válida do Google AI
+3. **Formatos suportados:** MP4, MOV, AVI, WebM
+4. **Tamanho máximo:** Limitado pelas especificações do Gemini
+
+### Próximos Passos
+
+1. Implementar download real de vídeos do Instagram
+2. Adicionar suporte a mais formatos de vídeo
+3. Implementar cache inteligente de análises
+4. Adicionar métricas de qualidade dos comentários
+5. Integrar com sistema de moderação de conteúdo
+
 ---
 
 *Documentação gerada automaticamente em 2025-01-27*

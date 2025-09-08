@@ -11,6 +11,8 @@ exports.up = function (knex) {
     table.integer("likes").defaultTo(0);
     table.integer("comments").defaultTo(0);
     table.text("caption").nullable().comment("Legenda do post do Instagram");
+    table.text("videoAnalysis").nullable().comment("Análise do vídeo do Instagram");
+    table.text("generatedComment").nullable().comment("Comentário gerado pela IA");
     table.datetime("post_date").nullable();
     table.timestamps(true, true);
     table

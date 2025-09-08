@@ -1,5 +1,8 @@
 import OpenAI from 'openai';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import fs from 'fs';
+import path from 'path';
+import { spawn } from 'child_process';
 
 export interface AIConfig {
   openaiApiKey?: string;
@@ -25,6 +28,13 @@ export interface AIResponse {
   provider: 'openai' | 'google';
   tokensUsed?: number;
   processingTime: number;
+}
+
+export interface VideoAnalysisResult {
+  videoAnalysis: string;
+  generatedComment: string;
+  processingTime: number;
+  videoPath?: string;
 }
 
 export class AIService {
@@ -137,7 +147,7 @@ export class AIService {
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    
+
     return response.text().trim() || 'Desculpe, não consegui gerar uma resposta.';
   }
 
@@ -209,7 +219,7 @@ Responda de forma natural e humanizada:`;
     context: MessageContext,
     count: number = 3
   ): Promise<AIResponse[]> {
-    const promises = Array.from({ length: count }, () => 
+    const promises = Array.from({ length: count }, () =>
       this.generateResponse(context)
     );
 
@@ -267,7 +277,7 @@ Responda de forma natural e humanizada:`;
     });
 
     // Retornar a resposta com maior pontuação
-    return scoredResponses.reduce((best, current) => 
+    return scoredResponses.reduce((best, current) =>
       current.score > best.score ? current : best
     );
   }
@@ -287,5 +297,249 @@ Responda de forma natural e humanizada:`;
     if (this.openai) providers.push('openai');
     if (this.googleAI) providers.push('google');
     return providers;
+  }
+
+  /**
+   * Analisa um vídeo do Instagram usando Gemini e gera um comentário
+   */
+  async analyzeInstagramVideo(
+    videoUrl: string,
+    caption?: string,
+    username?: string
+  ): Promise<VideoAnalysisResult> {
+    if (!this.googleAI) {
+      throw new Error('Google AI (Gemini) não está configurado. Necessário para análise de vídeo.');
+    }
+
+    const startTime = Date.now();
+    let videoPath: string | undefined;
+
+    try {
+      console.log(`🎥 Iniciando análise de vídeo: ${videoUrl}`);
+
+      // 1. Baixar o vídeo
+      videoPath = await this.downloadVideo(videoUrl);
+      console.log(`📥 Vídeo baixado: ${videoPath}`);
+
+      // 2. Fazer upload do vídeo para o Gemini
+      const model = this.googleAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+
+      // Ler o arquivo de vídeo
+      const videoData = fs.readFileSync(videoPath);
+      const mimeType = this.getMimeType(videoPath);
+
+      // 3. Criar prompt para análise
+      const analysisPrompt = this.buildVideoAnalysisPrompt(caption, username);
+
+      console.log(`🤖 Enviando vídeo para análise do Gemini...`);
+
+      // 4. Enviar para o Gemini
+      const result = await model.generateContent([
+        {
+          inlineData: {
+            data: videoData.toString('base64'),
+            mimeType: mimeType
+          }
+        },
+        analysisPrompt
+      ]);
+
+      const response = await result.response;
+      const videoAnalysis = response.text();
+
+      console.log(`📊 Análise do vídeo: ${videoAnalysis}`);
+
+      console.log(`✅ Análise do vídeo concluída`);
+
+      // 5. Gerar comentário baseado na análise
+      const generatedComment = await this.generateCommentFromAnalysis(videoAnalysis, caption, username);
+
+      const processingTime = Date.now() - startTime;
+
+      // 6. Limpar arquivo temporário
+      // if (videoPath && fs.existsSync(videoPath)) {
+      //   fs.unlinkSync(videoPath);
+      //   console.log(`🗑️ Arquivo temporário removido: ${videoPath}`);
+      // }
+
+      return {
+        videoAnalysis,
+        generatedComment,
+        processingTime
+        // videoPath omitido pois o arquivo foi removido
+      };
+
+    } catch (error) {
+      console.error('❌ Erro na análise do vídeo:', error);
+
+      // Limpar arquivo em caso de erro
+      // if (videoPath && fs.existsSync(videoPath)) {
+      //   fs.unlinkSync(videoPath);
+      // }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Baixa um vídeo do Instagram usando yt-dlp
+   */
+  private async downloadVideo(videoUrl: string): Promise<string> {
+    const videoId = this.extractVideoId(videoUrl);
+    const tempDir = path.join(process.cwd(), 'temp_videos');
+
+    // Criar diretório temporário se não existir
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const videoPath = path.join(tempDir, `${videoId}.%(ext)s`);
+    const ytDlpPath = path.join(process.cwd(), 'yt-dlp', 'yt-dlp.exe');
+
+    // Verificar se o yt-dlp existe
+    if (!fs.existsSync(ytDlpPath)) {
+      throw new Error(`yt-dlp não encontrado em: ${ytDlpPath}`);
+    }
+
+    return new Promise((resolve, reject) => {
+      console.log(`📥 Baixando vídeo: ${videoUrl}`);
+
+      const args = [
+        videoUrl,
+        '-o', videoPath,
+        '--format', 'best[ext=mp4]/best',
+        '--no-playlist',
+      ];
+
+      const ytDlp = spawn(ytDlpPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      ytDlp.stdout.on('data', (data) => {
+        stdout += data.toString();
+        console.log(`yt-dlp: ${data.toString().trim()}`);
+      });
+
+      ytDlp.stderr.on('data', (data) => {
+        stderr += data.toString();
+        console.error(`yt-dlp error: ${data.toString().trim()}`);
+      });
+
+      ytDlp.on('close', (code) => {
+        if (code === 0) {
+          // Encontrar o arquivo baixado (yt-dlp pode mudar a extensão)
+          const files = fs.readdirSync(tempDir).filter(file =>
+            file.startsWith(videoId) && (file.endsWith('.mp4') || file.endsWith('.webm') || file.endsWith('.mkv'))
+          );
+
+          if (files.length > 0) {
+            const downloadedFile = path.join(tempDir, files[0]);
+            console.log(`✅ Vídeo baixado com sucesso: ${downloadedFile}`);
+            resolve(downloadedFile);
+          } else {
+            reject(new Error('Arquivo de vídeo não encontrado após download'));
+          }
+        } else {
+          reject(new Error(`yt-dlp falhou com código ${code}. Stderr: ${stderr}`));
+        }
+      });
+
+      ytDlp.on('error', (error) => {
+        reject(new Error(`Erro ao executar yt-dlp: ${error.message}`));
+      });
+    });
+  }
+
+  /**
+   * Extrai ID do vídeo da URL do Instagram
+   */
+  private extractVideoId(url: string): string {
+    const match = url.match(/\/(p|reel)\/([^/]+)\//);
+    return match ? match[2] : `video_${Date.now()}`;
+  }
+
+  /**
+   * Determina o MIME type do arquivo de vídeo
+   */
+  private getMimeType(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    switch (ext) {
+      case '.mp4': return 'video/mp4';
+      case '.mov': return 'video/quicktime';
+      case '.avi': return 'video/x-msvideo';
+      case '.webm': return 'video/webm';
+      default: return 'video/mp4'; // fallback
+    }
+  }
+
+  /**
+   * Constrói o prompt para análise de vídeo
+   */
+  private buildVideoAnalysisPrompt(caption?: string, username?: string): string {
+    let prompt = `Analise este vídeo do Instagram e forneça uma descrição detalhada.`;
+
+    if (caption) {
+      prompt += `\n\nLegenda do post: "${caption}"`;
+      prompt += `\nConsidere como o conteúdo se relaciona com a legenda.`;
+    }
+
+    if (username) {
+      prompt += `\n\nEste vídeo foi postado por @${username}.`;
+    }
+
+    prompt += `\n\nSua análise deve ser:
+- Detalhada e precisa
+- Em português brasileiro`;
+    if (caption) {
+      prompt += `\n\n- Contextualizada com a legenda`;
+    }
+
+    return prompt;
+  }
+
+  /**
+   * Gera um comentário baseado na análise do vídeo
+   */
+  private async generateCommentFromAnalysis(
+    videoAnalysis: string,
+    caption?: string,
+    username?: string
+  ): Promise<string> {
+    if (!this.googleAI) {
+      throw new Error('Google AI não configurado');
+    }
+
+    const model = this.googleAI.getGenerativeModel({ model: 'gemini-2.5-pro' });
+
+    let prompt = `Você é uma mulher comentando em vídeos aleatórios no Instagram para gerar engajamento. Com base na seguinte análise de vídeo, gere um comentário natural e engajador para o Instagram:\n\n`;
+    prompt += `ANÁLISE DO VÍDEO:\n${videoAnalysis}\n\n`;
+
+    if (caption) {
+      prompt += `LEGENDA ORIGINAL: "${caption}"\n\n`;
+    }
+
+    if (username) {
+      prompt += `USUÁRIO: @${username}\n\n`;
+    }
+
+    prompt += `INSTRUÇÕES PARA O COMENTÁRIO:`;
+    prompt += `- Seja natural e autêntico`;
+    prompt += `- Máximo de 2-3 frases`;
+    prompt += `- Relacione com o conteúdo visual analisado`;
+    prompt += `- Use emojis apropriados (1-2 no máximo)`;
+    prompt += `- Evite ser genérico ou robótico`;
+    prompt += `- Seja positivo e engajador`;
+    prompt += `- Em português brasileiro`;
+    prompt += `- Cometa algum erro de digitação proposital para parecer humano`;
+    prompt += `- NÃO mencione que você analisou um vídeo\n`;
+    prompt += `Gere APENAS o comentário, sem explicações adicionais:`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+
+    return response.text().trim();
   }
 }
