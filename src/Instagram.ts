@@ -1093,6 +1093,12 @@ export class Instagram {
     console.log(`📥 Monitorar requests: ${includeRequests ? 'Sim' : 'Não'}`);
     const url = 'https://www.instagram.com/direct/inbox/';
     await this.page!.goto(url, { waitUntil: 'networkidle2' });
+
+    const [btn] = await this.page.$x("//button[contains(., 'Agora não')]");
+    if (btn) {
+      console.log("⚡ Botão 'Agora não' encontrado, clicando...");
+      await this.page!.evaluate((el) => (el as HTMLElement).click(), btn);
+    }
     while (this.isMonitoringNewMessages) {
       // Verifica conectividade antes de cada iteração
       const browserConnected = await this.isBrowserConnected();
@@ -1407,11 +1413,11 @@ export class Instagram {
     // Função auxiliar para verificar se o post está dentro do limite de idade
     const isPostWithinAgeLimit = (postDate: string | null): boolean => {
       if (!postDate) return true; // Se não há data, considera válido
-      
+
       const now = new Date();
       const postDateTime = new Date(postDate);
       const diffMs = now.getTime() - postDateTime.getTime();
-      
+
       let maxAgeMs: number;
       switch (maxPostAgeUnit) {
         case 'minutes':
@@ -1426,7 +1432,7 @@ export class Instagram {
         default:
           maxAgeMs = maxPostAge * 60 * 60 * 1000; // default para horas
       }
-      
+
       return diffMs <= maxAgeMs;
     };
 
@@ -1697,7 +1703,7 @@ export class Instagram {
                       // Post fora do limite de idade - não coleta likes para economizar recursos
                       postData.likedByUsers = [];
                       postData.followedLikers = false;
-                      
+
                       const dateInfo = postData.postDate ? ` (${new Date(postData.postDate).toLocaleDateString('pt-BR')})` : '';
                       console.log(
                         `⏰ Post/Reel de @${username} ignorado por idade${dateInfo} - fora do limite de ${maxPostAge} ${maxPostAgeUnit} (likes não coletados)`
@@ -1791,16 +1797,16 @@ export class Instagram {
 
     try {
       // Extrai o ID do post da URL
-      const postIdMatch = postUrl.match(/\/(p|reel)\/([^/]+)\//); 
+      const postIdMatch = postUrl.match(/\/(p|reel)\/([^/]+)\//);
       const postId = postIdMatch ? postIdMatch[2] : '';
-      
+
       if (!postId) {
         throw new Error('Não foi possível extrair o ID do post da URL');
       }
 
       // Extrai o username da URL ou tenta detectar na página
       let username = '';
-      const usernameMatch = postUrl.match(/instagram\.com\/([^/]+)\//); 
+      const usernameMatch = postUrl.match(/instagram\.com\/([^/]+)\//);
       if (usernameMatch) {
         username = usernameMatch[1];
       }
@@ -1913,17 +1919,17 @@ export class Instagram {
       }
 
       // Cria objeto PostData
-        const post: PostData = {
-          url: postUrl,
-          post_id: postId,
-          post_date: postData.postDate || undefined,
-          likes: postData.likes,
-          comments: postData.comments,
-          username: postData.username || 'desconhecido',
-          caption: postData.caption,
-          likedByUsers: likedByUsers,
-          followedLikers: false
-        };
+      const post: PostData = {
+        url: postUrl,
+        post_id: postId,
+        post_date: postData.postDate || undefined,
+        likes: postData.likes,
+        comments: postData.comments,
+        username: postData.username || 'desconhecido',
+        caption: postData.caption,
+        likedByUsers: likedByUsers,
+        followedLikers: false
+      };
 
       return post;
 
@@ -2061,28 +2067,28 @@ export class Instagram {
     }
   }
 
-/**
- * Faz download de um arquivo remoto e salva no diretório temporário local.
- * Retorna o caminho absoluto do arquivo salvo.
- */
-private async downloadFile(url: string, filename: string): Promise<string> {
-  // Usa fetch nativa do Node 18+
-  const res = await fetch(url);
+  /**
+   * Faz download de um arquivo remoto e salva no diretório temporário local.
+   * Retorna o caminho absoluto do arquivo salvo.
+   */
+  private async downloadFile(url: string, filename: string): Promise<string> {
+    // Usa fetch nativa do Node 18+
+    const res = await fetch(url);
 
-  if (!res.ok) {
-    throw new Error(`Erro ao baixar arquivo: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      throw new Error(`Erro ao baixar arquivo: ${res.status} ${res.statusText}`);
+    }
+
+    // Converte para Buffer
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Salva no diretório temporário
+    const tempPath = path.join(os.tmpdir(), filename);
+    fs.writeFileSync(tempPath, buffer);
+
+    return tempPath;
   }
-
-  // Converte para Buffer
-  const arrayBuffer = await res.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  // Salva no diretório temporário
-  const tempPath = path.join(os.tmpdir(), filename);
-  fs.writeFileSync(tempPath, buffer);
-
-  return tempPath;
-}
 
 
 }
