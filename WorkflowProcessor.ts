@@ -366,21 +366,23 @@ export class WorkflowProcessor {
           const postId = this.extractPostId(action.params.postId);
           this.sendLog(username, 'info', `🤖 Iniciando análise de mídia para comentário`);
           const post = await PostsDatabase.getPostById(postId, 'olavodecarvalho.ia');
-          if (post && !post?.generatedComment) {
+          if (post) {
             // Construir URL completa do Instagram a partir do ID do post
             const instagramUrl = post?.url || `https://www.instagram.com/p/${postId}/`;
-
-            const { mediaAnalysis, generatedComment, processingTime, mediaType } = await this.aiService.analyzeInstagramPost(instagramUrl, post?.caption, post?.username);
-            // Salvar análise e comentário no banco de dados
-            await PostsDatabase.updatePost(postId, {
-              videoAnalysis: mediaAnalysis, // Mantém o nome do campo no banco
-              generatedComment
-            }, 'olavodecarvalho.ia');
-            this.sendLog(username, 'info', `🤖 Análise de ${mediaType === 'video' ? 'vídeo' : 'imagem'} concluída em ${processingTime}ms`);
-            finalComment = post?.generatedComment || '';
-            this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
-          }
-          if (!post) {
+            if (!post?.generatedComment) {
+              const { mediaAnalysis, generatedComment, processingTime, mediaType } = await this.aiService.analyzeInstagramPost(instagramUrl, post?.caption, post?.username);
+              // Salvar análise e comentário no banco de dados
+              await PostsDatabase.updatePost(postId, {
+                videoAnalysis: mediaAnalysis, // Mantém o nome do campo no banco
+                generatedComment
+              }, 'olavodecarvalho.ia');
+              this.sendLog(username, 'info', `🤖 Análise de ${mediaType === 'video' ? 'vídeo' : 'imagem'} concluída em ${processingTime}ms`);
+              finalComment = generatedComment || '';
+              this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
+            } else {
+              finalComment = post?.generatedComment || '';
+            }
+          } else {
             // Construir URL completa do Instagram a partir do ID do post
             const instagramUrl = `https://www.instagram.com/p/${postId}/`;
             const postData = await instance.extractPostData(instagramUrl);
@@ -396,7 +398,8 @@ export class WorkflowProcessor {
             finalComment = generatedComment || '';
             this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
           }
-
+        } else {
+          finalComment = action.params.comment || '';
         }
 
         return await instance.commentPost(
