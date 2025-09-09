@@ -3,6 +3,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
+import { instagramGetUrl, InstagramResponse } from "instagram-url-direct"
 
 export interface AIConfig {
   openaiApiKey?: string;
@@ -30,11 +31,12 @@ export interface AIResponse {
   processingTime: number;
 }
 
-export interface VideoAnalysisResult {
-  videoAnalysis: string;
+export interface MediaAnalysisResult {
+  mediaAnalysis: string;
   generatedComment: string;
   processingTime: number;
-  videoPath?: string;
+  mediaPath?: string;
+  mediaType: 'video' | 'image';
 }
 
 export class AIService {
@@ -302,11 +304,11 @@ Responda de forma natural e humanizada:`;
   /**
    * Analisa um vídeo do Instagram usando Gemini e gera um comentário
    */
-  async analyzeInstagramVideo(
-    videoUrl: string,
+  async analyzeInstagramPost(
+    postUrl: string,
     caption?: string,
     username?: string
-  ): Promise<VideoAnalysisResult> {
+  ): Promise<MediaAnalysisResult> {
     if (!this.googleAI) {
       throw new Error('Google AI (Gemini) não está configurado. Necessário para análise de vídeo.');
     }
@@ -315,62 +317,28 @@ Responda de forma natural e humanizada:`;
     let videoPath: string | undefined;
 
     try {
-      console.log(`🎥 Iniciando análise de vídeo: ${videoUrl}`);
+      console.log(`🎥 Iniciando análise de post: ${postUrl}`);
 
-      // 1. Baixar o vídeo
-      videoPath = await this.downloadVideo(videoUrl);
-      console.log(`📥 Vídeo baixado: ${videoPath}`);
+      // 1. Tentar baixar como vídeo primeiro
+      try {
+        videoPath = await this.downloadVideo(postUrl);
+        console.log(`📥 Vídeo baixado: ${videoPath}`);
+        return await this.analyzeVideoContent(videoPath, startTime, caption, username);
+      } catch (videoError: any) {
+        console.log(`ℹ️ Não é um vídeo, tentando como imagem...`);
 
-      // 2. Fazer upload do vídeo para o Gemini
-      const model = this.googleAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-
-      // Ler o arquivo de vídeo
-      const videoData = fs.readFileSync(videoPath);
-      const mimeType = this.getMimeType(videoPath);
-
-      // 3. Criar prompt para análise
-      const analysisPrompt = this.buildVideoAnalysisPrompt(caption, username);
-
-      console.log(`🤖 Enviando vídeo para análise do Gemini...`);
-
-      // 4. Enviar para o Gemini
-      const result = await model.generateContent([
-        {
-          inlineData: {
-            data: videoData.toString('base64'),
-            mimeType: mimeType
-          }
-        },
-        analysisPrompt
-      ]);
-
-      const response = await result.response;
-      const videoAnalysis = response.text();
-
-      console.log(`📊 Análise do vídeo: ${videoAnalysis}`);
-
-      console.log(`✅ Análise do vídeo concluída`);
-
-      // 5. Gerar comentário baseado na análise
-      const generatedComment = await this.generateCommentFromAnalysis(videoAnalysis, caption, username);
-
-      const processingTime = Date.now() - startTime;
-
-      // 6. Limpar arquivo temporário
-      // if (videoPath && fs.existsSync(videoPath)) {
-      //   fs.unlinkSync(videoPath);
-      //   console.log(`🗑️ Arquivo temporário removido: ${videoPath}`);
-      // }
-
-      return {
-        videoAnalysis,
-        generatedComment,
-        processingTime
-        // videoPath omitido pois o arquivo foi removido
-      };
+        // 2. Se falhar, tentar como imagem
+        try {
+          videoPath = await this.downloadImage(postUrl);
+          console.log(`📥 Imagem baixada: ${videoPath}`);
+          return await this.analyzeImageContent(videoPath, startTime, caption, username);
+        } catch (imageError: any) {
+          throw new Error(`Falha ao baixar mídia: Vídeo - ${videoError.message}, Imagem - ${imageError.message}`);
+        }
+      }
 
     } catch (error) {
-      console.error('❌ Erro na análise do vídeo:', error);
+      console.error('❌ Erro na análise do post:', error);
 
       // Limpar arquivo em caso de erro
       // if (videoPath && fs.existsSync(videoPath)) {
@@ -379,6 +347,142 @@ Responda de forma natural e humanizada:`;
 
       throw error;
     }
+  }
+
+  /**
+   * Analisa conteúdo de vídeo
+   */
+  private async analyzeVideoContent(
+    videoPath: string,
+    startTime: number,
+    caption?: string,
+    username?: string
+  ): Promise<MediaAnalysisResult> {
+    const model = this.googleAI!.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+
+    // Ler o arquivo de vídeo
+    const videoData = fs.readFileSync(videoPath);
+    const mimeType = this.getMimeType(videoPath);
+
+    // Criar prompt para análise
+    const analysisPrompt = this.buildVideoAnalysisPrompt(caption, username);
+
+    console.log(`🤖 Enviando vídeo para análise do Gemini...`);
+
+    // Enviar para o Gemini
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          data: videoData.toString('base64'),
+          mimeType: mimeType
+        }
+      },
+      analysisPrompt
+    ]);
+
+    const response = await result.response;
+    const mediaAnalysis = response.text();
+
+    console.log(`📊 Análise do vídeo: ${mediaAnalysis}`);
+    console.log(`✅ Análise do vídeo concluída`);
+
+    // Gerar comentário baseado na análise
+    const generatedComment = await this.generateCommentFromAnalysis(mediaAnalysis, caption, username);
+
+    const processingTime = Date.now() - startTime;
+
+    return {
+      mediaAnalysis,
+      generatedComment,
+      processingTime,
+      mediaType: 'video'
+    };
+  }
+
+  /**
+   * Analisa conteúdo de imagem
+   */
+  private async analyzeImageContent(
+    imagePath: string,
+    startTime: number,
+    caption?: string,
+    username?: string
+  ): Promise<MediaAnalysisResult> {
+    const model = this.googleAI!.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+
+    // Ler o arquivo de imagem
+    const imageData = fs.readFileSync(imagePath);
+    const mimeType = this.getMimeType(imagePath);
+
+    // Criar prompt para análise de imagem
+    const analysisPrompt = this.buildImageAnalysisPrompt(caption, username);
+
+    console.log(`🤖 Enviando imagem para análise do Gemini...`);
+
+    // Enviar para o Gemini
+    const result = await model.generateContent([
+      {
+        inlineData: {
+          data: imageData.toString('base64'),
+          mimeType: mimeType
+        }
+      },
+      analysisPrompt
+    ]);
+
+    const response = await result.response;
+    const mediaAnalysis = response.text();
+
+    console.log(`📊 Análise da imagem: ${mediaAnalysis}`);
+    console.log(`✅ Análise da imagem concluída`);
+
+    // Gerar comentário baseado na análise
+    const generatedComment = await this.generateCommentFromAnalysis(mediaAnalysis, caption, username);
+
+    const processingTime = Date.now() - startTime;
+
+    return {
+      mediaAnalysis,
+      generatedComment,
+      processingTime,
+      mediaType: 'image'
+    };
+  }
+
+  /**
+   * Baixa uma imagem do Instagram usando instagram-url-direct
+   */
+  private async downloadImage(imageUrl: string): Promise<string> {
+    const data: InstagramResponse = await instagramGetUrl(imageUrl);
+    console.log(data);
+    
+    const imageDirectUrl = data.media_details[0].url;
+    const imageId = this.extractVideoId(imageUrl); // Reutiliza o método para extrair ID
+    const tempDir = path.join(process.cwd(), 'temp_videos');
+    
+    // Criar diretório temporário se não existir
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    
+    // Determinar extensão da imagem
+    const imageExtension = imageDirectUrl.includes('.jpg') ? '.jpg' : '.png';
+    const imagePath = path.join(tempDir, `${imageId}${imageExtension}`);
+    
+    // Baixar a imagem
+    const response = await fetch(imageDirectUrl);
+    if (!response.ok) {
+      throw new Error(`Falha ao baixar imagem: ${response.statusText}`);
+    }
+    
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    // Salvar a imagem no disco
+    fs.writeFileSync(imagePath, buffer);
+    
+    console.log(`📥 Imagem salva em: ${imagePath}`);
+    return imagePath;
   }
 
   /**
@@ -462,7 +566,7 @@ Responda de forma natural e humanizada:`;
   }
 
   /**
-   * Determina o MIME type do arquivo de vídeo
+   * Determina o MIME type do arquivo de vídeo ou imagem
    */
   private getMimeType(filePath: string): string {
     const ext = path.extname(filePath).toLowerCase();
@@ -471,6 +575,11 @@ Responda de forma natural e humanizada:`;
       case '.mov': return 'video/quicktime';
       case '.avi': return 'video/x-msvideo';
       case '.webm': return 'video/webm';
+      case '.jpg':
+      case '.jpeg': return 'image/jpeg';
+      case '.png': return 'image/png';
+      case '.webp': return 'image/webp';
+      case '.gif': return 'image/gif';
       default: return 'video/mp4'; // fallback
     }
   }
@@ -495,6 +604,32 @@ Responda de forma natural e humanizada:`;
 - Em português brasileiro`;
     if (caption) {
       prompt += `\n\n- Contextualizada com a legenda`;
+    }
+
+    return prompt;
+  }
+
+  /**
+   * Constrói o prompt para análise de imagem
+   */
+  private buildImageAnalysisPrompt(caption?: string, username?: string): string {
+    let prompt = `Analise esta imagem do Instagram e forneça uma descrição detalhada do conteúdo visual, objetos, pessoas, cenário, cores, composição, estilo e qualquer elemento relevante que você observar.`;
+
+    if (caption) {
+      prompt += `\n\nLegenda do post: "${caption}"`;
+      prompt += `\nConsidere como o conteúdo se relaciona com a legenda.`;
+    }
+
+    if (username) {
+      prompt += `\n\nEsta imagem foi postada por @${username}.`;
+    }
+
+    prompt += `\n\nSua análise deve ser:
+- Detalhada e precisa
+- Em português brasileiro
+- Focada em elementos visuais relevantes para gerar comentários engajadores`;
+    if (caption) {
+      prompt += `\n- Contextualizada com a legenda`;
     }
 
     return prompt;

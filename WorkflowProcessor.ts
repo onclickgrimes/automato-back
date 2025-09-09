@@ -364,19 +364,19 @@ export class WorkflowProcessor {
         if (action.params.commentByAI) {
           // Extrair postId do parâmetro
           const postId = this.extractPostId(action.params.postId);
-          this.sendLog(username, 'info', `🤖 Iniciando análise de vídeo para comentário`);
+          this.sendLog(username, 'info', `🤖 Iniciando análise de mídia para comentário`);
           const post = await PostsDatabase.getPostById(postId, 'olavodecarvalho.ia');
           if (post && !post?.generatedComment) {
             // Construir URL completa do Instagram a partir do ID do post
             const instagramUrl = post?.url || `https://www.instagram.com/p/${postId}/`;
 
-            const { videoAnalysis, generatedComment, processingTime } = await this.aiService.analyzeInstagramVideo(instagramUrl, post?.caption, post?.username);
+            const { mediaAnalysis, generatedComment, processingTime, mediaType } = await this.aiService.analyzeInstagramPost(instagramUrl, post?.caption, post?.username);
             // Salvar análise e comentário no banco de dados
             await PostsDatabase.updatePost(postId, {
-              videoAnalysis,
+              videoAnalysis: mediaAnalysis, // Mantém o nome do campo no banco
               generatedComment
             }, 'olavodecarvalho.ia');
-            this.sendLog(username, 'info', `🤖 Análise de vídeo concluída em ${processingTime}ms`);
+            this.sendLog(username, 'info', `🤖 Análise de ${mediaType === 'video' ? 'vídeo' : 'imagem'} concluída em ${processingTime}ms`);
             finalComment = post?.generatedComment || '';
             this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
           }
@@ -386,13 +386,13 @@ export class WorkflowProcessor {
             const postData = await instance.extractPostData(instagramUrl);
             console.log("Instagram URL:", instagramUrl);
             console.log("Post Data:", postData);
-            const { videoAnalysis, generatedComment, processingTime } = await this.aiService.analyzeInstagramVideo(instagramUrl, postData?.caption, postData?.username);
+            const { mediaAnalysis, generatedComment, processingTime, mediaType } = await this.aiService.analyzeInstagramPost(instagramUrl, postData?.caption, postData?.username);
             // Salvar análise e comentário no banco de dados
             await PostsDatabase.updatePost(postId, {
-              videoAnalysis,
+              videoAnalysis: mediaAnalysis, // Mantém o nome do campo no banco
               generatedComment
             }, 'olavodecarvalho.ia');
-            this.sendLog(username, 'info', `🤖 Análise de vídeo concluída em ${processingTime}ms`);
+            this.sendLog(username, 'info', `🤖 Análise de ${mediaType === 'video' ? 'vídeo' : 'imagem'} concluída em ${processingTime}ms`);
             finalComment = generatedComment || '';
             this.sendLog(username, 'info', `🤖 Comentário gerado pela IA: ${finalComment}`);
           }
