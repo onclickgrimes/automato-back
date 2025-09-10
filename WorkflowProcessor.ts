@@ -421,7 +421,26 @@ export class WorkflowProcessor {
         this.sendLog(username, 'info', '📬 Iniciando monitoramento de mensagens');
 
         try {
-          const result = await instance.monitorNewMessages(messageOptions);
+          // Criar uma Promise que pode ser cancelada
+          const monitoringPromise = instance.monitorNewMessages(messageOptions);
+          
+          // Verificar periodicamente se o workflow foi cancelado
+          const checkCancellation = async () => {
+            while (instance.getIsMonitoringNewMessages()) {
+              const currentResult = this.results.get(context?.workflowId || '');
+              if (currentResult && (currentResult.error === 'Workflow interrompido pelo usuário' || 
+                  currentResult.error?.includes('Timeout do workflow'))) {
+                console.log('🛑 Parando monitoramento devido ao cancelamento do workflow');
+                instance.switchMessagesMonitoring(false);
+                break;
+              }
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Verificar a cada segundo
+            }
+          };
+          
+          // Executar ambas as promises em paralelo
+          const [result] = await Promise.all([monitoringPromise, checkCancellation()]);
+          
           this.sendLog(username, 'success', '✅ Monitoramento de mensagens concluído');
           return result;
         } catch (error: any) {
@@ -798,9 +817,18 @@ export class WorkflowProcessor {
 
       // Configurar timeout global se especificado
       let timeoutHandle: NodeJS.Timeout | null = null;
+      let isWorkflowCancelled = false;
+      
       if (workflow.config?.timeout) {
         timeoutHandle = setTimeout(() => {
-          throw new Error(`Timeout do workflow: ${workflow.config!.timeout}ms excedido`);
+          isWorkflowCancelled = true;
+          // Marcar workflow como cancelado ao invés de lançar erro
+          const currentResult = this.results.get(workflow.id);
+          if (currentResult) {
+            currentResult.error = `Timeout do workflow: ${workflow.config!.timeout}ms excedido`;
+            currentResult.success = false;
+          }
+          console.log(`⏰ Timeout do workflow ${workflow.id} após ${workflow.config!.timeout}ms`);
         }, workflow.config.timeout);
       }
 
@@ -812,9 +840,9 @@ export class WorkflowProcessor {
       let currentStepId = this.findInitialStep(workflow);
 
       while (currentStepId && !visitedSteps.has(currentStepId)) {
-        // Verificar se o workflow foi interrompido
+        // Verificar se o workflow foi interrompido ou cancelado por timeout
         const currentResult = this.results.get(workflow.id);
-        if (currentResult && currentResult.error === 'Workflow interrompido pelo usuário') {
+        if (currentResult && (currentResult.error === 'Workflow interrompido pelo usuário' || isWorkflowCancelled)) {
           console.log(`🛑 Workflow ${workflow.id} foi interrompido durante a execução`);
           break;
         }
@@ -1133,8 +1161,51 @@ export class WorkflowProcessor {
       console.log(`🛑 MessageProcessor para workflow ${workflowId} foi parado`);
     }
 
+    // Parar monitoramento de mensagens em todas as instâncias ativas
+    for (const [instanceName, instance] of this.activeInstances) {
+      if (instance.getIsMonitoringNewMessages()) {
+        console.log(`🛑 Parando monitoramento de mensagens para ${instanceName}`);
+        instance.switchMessagesMonitoring(false);
+      }
+      if (instance.getIsMonitoringNewPostsFromUsers()) {
+        console.log(`🛑 Parando monitoramento de posts para ${instanceName}`);
+        instance.switchPostsMonitoring(false);
+      }
+    }
+
     console.log(`🛑 Workflow ${workflowId} foi interrompido`);
     return true;
+  }
+
+  /**
+   * Cancela todos os workflows ativos e monitoramentos
+   */
+  async cancelAllActiveWorkflows(): Promise<void> {
+    console.log('🛑 Cancelando todos os workflows ativos...');
+    
+    // Parar todos os workflows
+    const activeWorkflowIds = Array.from(this.results.keys());
+    for (const workflowId of activeWorkflowIds) {
+      await this.stopWorkflow(workflowId);
+    }
+    
+    // Parar todos os message processors
+    for (const [workflowId, processor] of this.activeMessageProcessors) {
+      await processor.stopAutoProcessing();
+      this.activeMessageProcessors.delete(workflowId);
+    }
+    
+    // Parar todos os monitoramentos
+    for (const [instanceName, instance] of this.activeInstances) {
+      if (instance.getIsMonitoringNewMessages()) {
+        instance.switchMessagesMonitoring(false);
+      }
+      if (instance.getIsMonitoringNewPostsFromUsers()) {
+        instance.switchPostsMonitoring(false);
+      }
+    }
+    
+    console.log('✅ Todos os workflows e monitoramentos foram cancelados');
   }
 
   /**

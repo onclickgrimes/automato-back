@@ -251,7 +251,7 @@ app.post('/api/instagram/iniciar', async (req, res) => {
 
       config = {
         username,
-        password: '', // Não usado quando usando cookies
+        password: password!, // Não usado quando usando cookies
         headless: false,
         userDataDir: `./puppeteer-cache/${username}/user-data`,
         cookiesPath

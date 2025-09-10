@@ -194,20 +194,128 @@ export class Instagram {
     await this.page.goto('https://www.instagram.com/accounts/login/', { waitUntil: 'networkidle2' });
     await this.randomDelay(2000, 4000);
 
-    // Aguarda os campos de login aparecerem
-    await this.page.waitForSelector('input[name="username"]', { timeout: 10000 });
-    await this.page.waitForSelector('input[name="password"]', { timeout: 10000 });
+    // Lista de seletores possíveis para o campo de username/email
+    const usernameSelectors = [
+      'input[name="username"]',
+      'input[name="email"]',
+      'input[type="text"]',
+      'input[autocomplete="username"]',
+      'input[placeholder*="usuário"]',
+      'input[placeholder*="username"]',
+      'input[placeholder*="email"]'
+    ];
 
-    // Preenche username com digitação humana
-    await this.humanType('input[name="username"]', this.config.username);
+    const passwordSelector = [
+      'input[name="password"]',
+      'input[type="password"]',
+      'input[name="pass"]'
+    ]
+
+    console.log('🔍 Procurando campo de username/email...');
+
+    let usernameInput = null;
+    let usedSelector = '';
+
+    // Tenta encontrar o campo de username com diferentes seletores
+    for (const selector of usernameSelectors) {
+      try {
+        console.log(`⏳ Tentando seletor: ${selector}`);
+        usernameInput = await this.page.waitForSelector(selector, { timeout: 3000 });
+        if (usernameInput) {
+          usedSelector = selector;
+          console.log(`✅ Campo encontrado com seletor: ${selector}`);
+          break;
+        }
+      } catch (error) {
+        console.log(`❌ Seletor ${selector} não funcionou`);
+        continue;
+      }
+    }
+
+    if (!usernameInput) {
+      // Debug: lista todos os inputs disponíveis na página
+      const allInputs = await this.page.$$eval('input', inputs =>
+        inputs.map(input => ({
+          name: input.getAttribute('name'),
+          type: input.getAttribute('type'),
+          placeholder: input.getAttribute('placeholder'),
+          autocomplete: input.getAttribute('autocomplete'),
+          id: input.getAttribute('id'),
+          className: input.className
+        }))
+      );
+
+      console.log('🔍 Todos os inputs encontrados na página:', JSON.stringify(allInputs, null, 2));
+      throw new Error('Não foi possível encontrar o campo de username/email');
+    }
+
+    // Preenche o campo de username
+    await usernameInput.focus();
+    await this.humanType(usedSelector, this.config.username);
     await this.randomDelay(1000, 2000);
 
-    // Preenche password com digitação humana
-    await this.humanType('input[name="password"]', this.config.password);
+    console.log('🔍 Procurando campo de password...');
+
+    let passwordInput = null;
+    let usedPasswordSelector = '';
+
+    // Tenta encontrar o campo de password com diferentes seletores
+    for (const selector of passwordSelector) {
+      try {
+        console.log(`⏳ Tentando seletor: ${selector}`);
+        passwordInput = await this.page.waitForSelector(selector, { timeout: 3000 });
+        if (passwordInput) {
+          usedPasswordSelector = selector;
+          console.log(`✅ Campo encontrado com seletor: ${selector}`);
+          break;
+        }
+      } catch (error) {
+        console.log(`❌ Seletor ${selector} não funcionou`);
+        continue;
+      }
+    }
+
+    if (!passwordInput) {
+      throw new Error('Não foi possível encontrar o campo de password');
+    }
+
+
+
+    // Preenche o campo de password
+    await passwordInput.focus();
+    await this.humanType(usedPasswordSelector, this.config.password);
     await this.randomDelay(1000, 2000);
 
-    // Clica no botão de login
-    await this.page.click('button[type="submit"]');
+    // Clica no botão de login ou entrar  <span class="x1lliihq x193iq5w x6ikm8r x10wlt62 xlyipyv xuxw1ft">Entrar</span>
+    // Try to find and click the login button
+    const loginButtonSelectors = [
+      'button[type="submit"]',
+      'span.x1lliihq.x193iq5w.x6ikm8r.x10wlt62.xlyipyv.xuxw1ft',
+      'span:has-text("Entrar")',
+      'button:has-text("Entrar")',
+      'button:has-text("Log in")',
+      '[role="button"]:has-text("Entrar")',
+      '[role="button"]:has-text("Log in")'
+    ];
+
+    let loginButton = null;
+    for (const selector of loginButtonSelectors) {
+      try {
+        loginButton = await this.page?.waitForSelector(selector, { timeout: 3000 });
+        if (loginButton) {
+          console.log(`✅ Login button found with selector: ${selector}`);
+          await loginButton.click();
+          break;
+        }
+      } catch (error) {
+        console.log(`❌ Selector ${selector} not found`);
+        continue;
+      }
+    }
+
+    if (!loginButton) {
+      throw new Error('Login button not found');
+    }
 
     // Aguarda navegação ou erro
     try {
@@ -276,21 +384,69 @@ export class Instagram {
     if (!this.page) return;
 
     try {
-      // "Salvar informações de login"
-      const saveInfoButton = await this.page.$('button:contains("Agora não")');
-      if (saveInfoButton) {
-        await saveInfoButton.click();
-        await this.randomDelay(1000, 2000);
-      }
+      // Lista de seletores para botões "Agora não"
+      const buttonSelectors = [
+        'button:contains("Agora não")',
+        'div[role="button"]:contains("Agora não")',
+        'button[type="button"]:contains("Agora não")',
+        '[role="button"]'
+      ];
 
-      // "Ativar notificações"
-      const notificationButton = await this.page.$('button:contains("Agora não")');
-      if (notificationButton) {
-        await notificationButton.click();
-        await this.randomDelay(1000, 2000);
-      }
+      // Função para encontrar e clicar em botões "Agora não"
+      const findAndClickButton = async (description: string) => {
+        if (!this.page) return false;
+
+        for (const selector of buttonSelectors) {
+          try {
+            // Para seletores sem :contains, usa evaluate para verificar texto
+            if (selector === '[role="button"]') {
+              const buttons = await this.page.$$eval('[role="button"]', (elements) => {
+                return elements.map((el, index) => ({
+                  index,
+                  text: el.textContent?.trim() || '',
+                  hasAgoraNao: el.textContent?.includes('Agora não') || false
+                }));
+              });
+
+              const agoraNaoButton = buttons.find(btn => btn.hasAgoraNao);
+              if (agoraNaoButton) {
+                const buttonElements = await this.page.$$('[role="button"]');
+                if (buttonElements[agoraNaoButton.index]) {
+                  console.log(`✅ ${description} - Clicando em div[role="button"] com "Agora não"`);
+                  await buttonElements[agoraNaoButton.index].click();
+                  await this.randomDelay(1000, 2000);
+                  return true;
+                }
+              }
+            } else {
+              // Para seletores com :contains, tenta diretamente
+              const element = await this.page.$(selector);
+              if (element) {
+                console.log(`✅ ${description} - Clicando em ${selector}`);
+                await element.click();
+                await this.randomDelay(1000, 2000);
+                return true;
+              }
+            }
+          } catch (error) {
+            // Continua tentando outros seletores
+            continue;
+          }
+        }
+        return false;
+      };
+
+      // Tenta encontrar e clicar em "Salvar informações de login"
+      await findAndClickButton('Salvar informações de login');
+
+      // Aguarda um pouco antes de procurar o próximo popup
+      await this.randomDelay(1000, 2000);
+
+      // Tenta encontrar e clicar em "Ativar notificações"
+      await findAndClickButton('Ativar notificações');
 
     } catch (error) {
+      console.log('⚠️ Popup de login ignorado:', error);
       // Ignora erros de popups
     }
   }
@@ -1110,6 +1266,12 @@ export class Instagram {
         break;
       }
 
+      // Verificação adicional se o monitoramento foi desabilitado externamente
+      if (!this.isMonitoringNewMessages) {
+        console.log('🛑 Monitoramento de mensagens foi desabilitado externamente');
+        break;
+      }
+
       if (!this.page!.url().includes("/direct/inbox/")) {
         try {
           await this.page!.goto(url, { waitUntil: 'networkidle2' });
@@ -1132,6 +1294,12 @@ export class Instagram {
         console.log('Número de conversas não lidas:', unreadElements.length);
 
         for (const conv of unreadElements) {
+          // Verificar se o monitoramento ainda está ativo antes de processar cada conversa
+          if (!this.isMonitoringNewMessages) {
+            console.log('🛑 Monitoramento interrompido durante processamento de conversas');
+            break;
+          }
+
           try {
             // Clica na conversa
             await (conv as ElementHandle<Element>).click();
